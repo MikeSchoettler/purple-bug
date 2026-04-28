@@ -14,7 +14,16 @@
       "Bash(git init *)",
       "Bash(git add *)",
       "Bash(git commit *)",
-      "Bash(git config *)"
+      "Bash(git config *)",
+      "Bash(gh repo *)",
+      "Bash(cp \"/Users/schettler/Documents/Tasks/Yango Play/14 Figma Make WIP/Purple Bug/Logoshot/\"*.mp4 /Users/schettler/Purple_bug/public/assets/logoshots/)",
+      "Bash(cp \"/Users/schettler/Documents/Tasks/Yango Play/14 Figma Make WIP/Purple Bug/Logoshot/\"*.mp3 /Users/schettler/Purple_bug/public/assets/logoshots/)",
+      "Bash(cp '/Users/schettler/Documents/Tasks/Yango Play/01 Partnership/Crunchy/Old/Component 2 /Template folder/New Fonts/Yango Group Headline/YangoGroupHeadline-Heavy.ttf' /Users/schettler/Purple_bug/public/assets/fonts/YangoGroupHeadline-ExtraBold.ttf)",
+      "Bash(cp '/Users/schettler/Documents/Tasks/Yango Play/01 Partnership/Crunchy/Old/Component 2 /Template folder/New Fonts/Yango Group Text/TTF/YangoGroupText-Medium.ttf' /Users/schettler/Purple_bug/public/assets/fonts/YangoGroupText-Medium.ttf)",
+      "Bash(cp \"/Users/schettler/Documents/Tasks/Yango Play/01 Partnership/Noon/OUT/Noon One Yango Plus folder/\\(Footage\\)/YangoGroupHeadline-HeavyArabic.otf\" /Users/schettler/Purple_bug/public/assets/fonts/YangoGroupHeadline-ExtraBold-AR.otf)",
+      "Bash(printenv)",
+      "Bash(npx tsc *)",
+      "Bash(node /Users/schettler/Purple_bug/node_modules/typescript/bin/tsc --noEmit)"
     ]
   }
 }
