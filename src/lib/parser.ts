@@ -14,6 +14,8 @@ const CAMPAIGN_MAP: Record<string, CampaignType> = {
 export function parseTaskFile(content: string, opts: {
   titleLogoEN: string
   titleLogoAR: string
+  titleName?: string
+  campaign?: CampaignType
   videosLocalDir?: string
   videosDiskUrl?: string
   customOverlays?: Record<string, string>
@@ -60,8 +62,8 @@ export function parseTaskFile(content: string, opts: {
   }
 
   return {
-    titleName: sanitizeFilename(titleName),
-    campaign,
+    titleName: sanitizeFilename(opts.titleName ?? titleName),
+    campaign: opts.campaign ?? campaign,
     versions,
     titleLogoEN: opts.titleLogoEN,
     titleLogoAR: opts.titleLogoAR,
