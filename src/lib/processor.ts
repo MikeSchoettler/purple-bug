@@ -51,6 +51,7 @@ export async function runPipeline(
               videoFile: { ...videoFile, format: vFormat },
               language: lang,
               version,
+              outputFormat,
               outputPath,
             })
             outputs.push(result)

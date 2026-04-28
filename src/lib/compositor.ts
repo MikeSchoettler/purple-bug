@@ -3,51 +3,41 @@ import ffmpegStatic from 'ffmpeg-static'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
-import type { ProcessingJob, VideoFormat } from './types'
+import type { ProcessingJob } from './types'
 import { LAYOUT, LOGOSHOT_FILES, LOGOSHOT_AUDIO, LOGOSHOT_TIMING, platePath } from './constants'
-import {
-  renderOfferText, renderWatchNowText, renderCtaButton, fitLogo
-} from './text-renderer'
+import { renderOfferText, renderWatchNowText, renderCtaButton, fitLogo } from './text-renderer'
 
 if (ffmpegStatic) ffmpeg.setFfmpegPath(ffmpegStatic)
 
 export async function processJob(job: ProcessingJob): Promise<string> {
-  const { taskConfig, videoFile, language, version, outputPath } = job
-  const { format } = videoFile
-  const layout = LAYOUT[format]
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'purple-bug-'))
+  const { taskConfig, videoFile, language, version, outputFormat, outputPath } = job
+  const layout = LAYOUT[outputFormat]
+  const langLayout = layout[language]
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pb-'))
 
   try {
-    // Determine actual format for FEED (uses SQ video but different frame/plate)
-    const outputFormat: VideoFormat = format === 'SQ' && outputPath.includes('FEED') ? 'FEED' : format
-    const outLayout = LAYOUT[outputFormat]
+    const text    = language === 'EN' ? version.mainTextEN : version.mainTextAR
+    const ctaText = language === 'EN' ? version.ctaEN      : version.ctaAR
+    const logoPath = language === 'EN' ? taskConfig.titleLogoEN : taskConfig.titleLogoAR
 
-    // --- Step 1: Prepare overlay PNGs ---
-    const text = language === 'EN' ? version.mainTextEN : version.mainTextAR
-    const ctaText = language === 'EN' ? version.ctaEN : version.ctaAR
-
+    // Render all overlay PNGs in parallel
     const [offerPng, watchNowPng, ctaPng, titleLogoPng] = await Promise.all([
-      renderOfferText(text, language, outLayout.offerText.w, outLayout.offerText.h)
+      renderOfferText(text, language, langLayout.offerText.w, langLayout.offerText.h)
         .then(buf => writeTmp(tmpDir, 'offer.png', buf)),
-
-      renderWatchNowText(language, outLayout.frame.w)
+      renderWatchNowText(language, layout.frame.w)
         .then(buf => writeTmp(tmpDir, 'watchnow.png', buf)),
-
-      renderCtaButton(ctaText, language, outLayout.frame.w)
+      renderCtaButton(ctaText, language, layout.frame.w)
         .then(buf => writeTmp(tmpDir, 'cta.png', buf)),
-
-      fitLogo(
-        language === 'EN' ? taskConfig.titleLogoEN : taskConfig.titleLogoAR,
-        outLayout.titleLogo.w, outLayout.titleLogo.h
-      ).then(buf => writeTmp(tmpDir, 'title_logo.png', buf)),
+      fitLogo(logoPath, langLayout.titleLogo.w, langLayout.titleLogo.h)
+        .then(buf => writeTmp(tmpDir, 'title_logo.png', buf)),
     ])
 
-    // --- Step 2: Resolve plate (standard or custom override) ---
+    // Resolve plate (custom override or standard)
     const plateFile = taskConfig.customOverlays?.[outputFormat]
-      ?? platePath(outputFormat, taskConfig.campaign)
+      ?? platePath(outputFormat, taskConfig.campaign, language)
     const hasPlate = fs.existsSync(plateFile)
 
-    // --- Step 3: Resolve logoshot ---
+    // Resolve logoshot assets
     const logoshotVideo = path.join(process.cwd(), 'public', 'assets', 'logoshots', LOGOSHOT_FILES[outputFormat])
     const logoshotAudio = path.join(process.cwd(), 'public', 'assets', 'logoshots', LOGOSHOT_AUDIO[language])
 
@@ -55,80 +45,69 @@ export async function processJob(job: ProcessingJob): Promise<string> {
     const logoshotStart = dur <= LOGOSHOT_TIMING.shortVideoThreshold
       ? LOGOSHOT_TIMING.shortVideoOffset
       : dur - LOGOSHOT_TIMING.longVideoPreroll
-
-    // --- Step 4: Build FFmpeg filter complex ---
-    const { x: ctaX, y: ctaY } = outLayout.logoshotCta.button
-    const { x: watchX, y: watchY } = outLayout.logoshotCta.watchNow
-    const { x: offerX, y: offerY } = outLayout.offerText
-    const { x: logoX, y: logoY } = outLayout.titleLogo
     const fadeD = LOGOSHOT_TIMING.fadeInDuration
     const t = logoshotStart
 
-    // Input indices
-    let inputIdx = 1 // [0] = trailer
-    const plateIdx  = hasPlate ? inputIdx++ : -1
-    const logoIdx   = inputIdx++
-    const offerIdx  = inputIdx++
-    const logoshotVideoIdx = inputIdx++
-    const logoshotAudioIdx = inputIdx++
-    const watchIdx  = inputIdx++
-    const ctaIdx    = inputIdx++
+    // Build input list and track indices
+    // [0] trailer, then conditionally plate, then fixed overlays
+    let idx = 1
+    const plateIdx      = hasPlate ? idx++ : -1
+    const logoIdx       = idx++
+    const offerIdx      = idx++
+    const logoshotVidIdx = idx++
+    const logoshotAudIdx = idx++
+    const watchIdx      = idx++
+    const ctaIdx        = idx++
 
-    let filterChain = '[0:v]'
+    const { x: logoX, y: logoY } = langLayout.titleLogo
+    const { x: offerX, y: offerY } = langLayout.offerText
+    const { x: watchX, y: watchY } = layout.logoshotCta.watchNow
+    const { x: ctaX, y: ctaY }    = layout.logoshotCta.button
 
-    // Plate overlay (full frame transparent PNG)
+    // Build filter_complex as a string
+    let v = '[0:v]'
+
     if (hasPlate) {
-      filterChain += `[${plateIdx}:v]overlay=0:0[vp];[vp]`
+      v += `[${plateIdx}:v]overlay=0:0[vp];[vp]`
     }
 
-    // Title logo overlay
-    filterChain += `[${logoIdx}:v]overlay=${logoX}:${logoY}[vl];[vl]`
+    v +=
+      `[${logoIdx}:v]overlay=${logoX}:${logoY}[vl];[vl]` +
+      `[${offerIdx}:v]overlay=${offerX}:${offerY}[vo];` +
 
-    // Offer text overlay
-    filterChain += `[${offerIdx}:v]overlay=${offerX}:${offerY}[vo];[vo]`
+      // Logoshot overlay: starts at t, positioned over full frame
+      `[${logoshotVidIdx}:v]setpts=PTS-STARTPTS+${t}/TB[ls];` +
+      `[vo][ls]overlay=0:0:shortest=1[vlsbase];` +
 
-    // Logoshot video overlay starting at logoshotStart
-    filterChain +=
-      `[${logoshotVideoIdx}:v]setpts=PTS-STARTPTS+${t}/TB[ls];` +
-      `[vo][ls]overlay=0:0:shortest=1[vlsbase];[vlsbase]`
-
-    // "Watch now on" with fade-in
-    filterChain +=
+      // Fade-in "Watch now on"
       `[${watchIdx}:v]fade=t=in:st=${t}:d=${fadeD}:alpha=1[fw];` +
-      `[fw]overlay=${watchX}:${watchY}:shortest=1[vwatch];[vwatch]`
+      `[vlsbase][fw]overlay=${watchX}:${watchY}:shortest=1[vw];` +
 
-    // CTA button with fade-in
-    filterChain +=
-      `[${ctaIdx}:v]fade=t=in:st=${t}:d=${fadeD}:alpha=1[fcta];` +
-      `[fcta]overlay=${ctaX}:${ctaY}:shortest=1[vfinal]`
+      // Fade-in CTA button
+      `[${ctaIdx}:v]fade=t=in:st=${t}:d=${fadeD}:alpha=1[fc];` +
+      `[vw][fc]overlay=${ctaX}:${ctaY}:shortest=1[vfinal]`
 
-    // Audio: trailer until logoshotStart, then logoshot audio
     const audioFilter =
       `[0:a]atrim=0:${t},asetpts=PTS-STARTPTS[atrl];` +
-      `[${logoshotAudioIdx}:a]atrim=0:${dur - t},asetpts=PTS-STARTPTS[als];` +
+      `[${logoshotAudIdx}:a]atrim=0:${dur - t},asetpts=PTS-STARTPTS[als];` +
       `[atrl][als]concat=n=2:v=0:a=1[afinal]`
 
-    const fullFilter = [filterChain, audioFilter].join(';')
-
-    // --- Step 5: Run FFmpeg ---
     fs.mkdirSync(path.dirname(outputPath), { recursive: true })
 
     await new Promise<void>((resolve, reject) => {
-      const cmd = ffmpeg()
-        .input(videoFile.path)                                          // [0] trailer
-        .inputOptions(['-loop', '1'])
+      const cmd = ffmpeg().input(videoFile.path)
 
-      if (hasPlate) cmd.input(plateFile)                               // plate
+      if (hasPlate) cmd.input(plateFile)
       cmd
-        .input(titleLogoPng)                                           // title logo
-        .input(offerPng)                                               // offer text
-        .input(logoshotVideo)                                          // logoshot video
-        .input(logoshotAudio)                                          // logoshot audio
-        .input(watchNowPng)                                            // watch now text
-        .input(ctaPng)                                                 // CTA button
+        .input(titleLogoPng)
+        .input(offerPng)
+        .input(logoshotVideo)
+        .input(logoshotAudio)
+        .input(watchNowPng)
+        .input(ctaPng)
 
       cmd
-        .complexFilter(fullFilter)
+        .complexFilter(`${v};${audioFilter}`)
         .outputOptions([
           '-map [vfinal]',
           '-map [afinal]',
@@ -142,7 +121,7 @@ export async function processJob(job: ProcessingJob): Promise<string> {
         ])
         .output(outputPath)
         .on('end', () => resolve())
-        .on('error', reject)
+        .on('error', (err, _stdout, stderr) => reject(new Error(`${err.message}\n${stderr}`)))
         .run()
     })
 

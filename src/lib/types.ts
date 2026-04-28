@@ -37,13 +37,16 @@ export interface LayoutRect {
   h: number
 }
 
+// Language-specific overlay positions (offer text + title logo)
+export interface LangLayout {
+  offerText: LayoutRect
+  titleLogo: LayoutRect
+}
+
 export interface FormatLayout {
   frame: { w: number; h: number }
-  plate: LayoutRect
-  logoBlock: LayoutRect
-  titleLogo: LayoutRect
-  offerText: LayoutRect
-  legalText: LayoutRect
+  EN: LangLayout
+  AR: LangLayout
   logoshotCta: { watchNow: LayoutRect; button: LayoutRect }
 }
 
@@ -52,5 +55,6 @@ export interface ProcessingJob {
   videoFile: VideoFile
   language: Language
   version: TextVersion
+  outputFormat: VideoFormat
   outputPath: string
 }

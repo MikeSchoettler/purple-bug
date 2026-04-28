@@ -4,6 +4,7 @@ import path from 'path'
 import os from 'os'
 import { parseTaskFile } from '@/lib/parser'
 import { runPipeline, zipOutputs } from '@/lib/processor'
+import { downloadDiskFolder } from '@/lib/disk-downloader'
 
 export const maxDuration = 300
 
@@ -28,13 +29,19 @@ export async function POST(req: NextRequest) {
   fs.mkdirSync(videosDir)
 
   try {
+    const logs: string[] = []
     const taskContent = await taskFile.text()
     const logoENPath  = await saveFile(logoEN, tmpDir, 'logo_en.png')
     const logoARPath  = await saveFile(logoAR, tmpDir, 'logo_ar.png')
 
-    // Save video files
+    // Save uploaded video files (if any)
     for (const video of videoFiles) {
       await saveFile(video, videosDir, video.name)
+    }
+
+    // Download videos from Yandex Disk if URL provided
+    if (diskUrl) {
+      await downloadDiskFolder(diskUrl, videosDir, msg => logs.push(msg))
     }
 
     // Check for custom overlay PNGs (optional)
@@ -55,8 +62,6 @@ export async function POST(req: NextRequest) {
     })
 
     const outputDir = path.join(tmpDir, 'output')
-    const logs: string[] = []
-
     const result = await runPipeline(taskConfig, videosDir, outputDir, msg => logs.push(msg))
 
     if (result.outputs.length === 0) {

@@ -1,21 +1,21 @@
-import type { CampaignType, FormatLayout, VideoFormat } from './types'
+import type { CampaignType, FormatLayout, VideoFormat, Language } from './types'
 import path from 'path'
 
 export const ASSETS_DIR = path.join(process.cwd(), 'public', 'assets')
-export const FONTS_DIR = path.join(ASSETS_DIR, 'fonts')
+export const FONTS_DIR  = path.join(ASSETS_DIR, 'fonts')
 export const PLATES_DIR = path.join(ASSETS_DIR, 'plates')
 export const LOGOSHOTS_DIR = path.join(ASSETS_DIR, 'logoshots')
 
-export const FONT_HEADLINE = path.join(FONTS_DIR, 'YangoGroupHeadline-ExtraBold.ttf')
+export const FONT_HEADLINE    = path.join(FONTS_DIR, 'YangoGroupHeadline-ExtraBold.ttf')
 export const FONT_HEADLINE_AR = path.join(FONTS_DIR, 'YangoGroupHeadline-ExtraBold-AR.otf')
-export const FONT_TEXT = path.join(FONTS_DIR, 'YangoGroupText-Medium.ttf')
+export const FONT_TEXT        = path.join(FONTS_DIR, 'YangoGroupText-Medium.ttf')
 
-// Gradient for offer text: white (top) → gold (bottom)
+// Offer text gradient: white (top) → gold (bottom)
 export const OFFER_TEXT_GRADIENT = {
   stops: [
     { offset: 0.12, color: '#FFFFFF' },
     { offset: 1.0,  color: '#FFC44D' },
-]
+  ]
 }
 
 // CTA button gradient: purple → pink → light pink (left → right)
@@ -42,80 +42,97 @@ export const WATCH_NOW_TEXT = {
   color: '#FFFFFF',
 }
 
-export const LEGAL_TEXT = {
-  EN: 'T&C apply: clck.ly/3LcHDj',
-  AR: 'تطبق الشروط والأحكام: clck.ly/3LcHDj',
-  fontSize: 28,
-  color: 'rgba(255,255,255,0.3)',
-}
-
-// Logoshot timing rules
 export const LOGOSHOT_TIMING = {
-  shortVideoThreshold: 6,   // seconds
-  shortVideoOffset: 4,      // logoshot starts at t=4s for ≤6s videos
-  longVideoPreroll: 3,      // logoshot covers last 3s for >6s videos
-  fadeInDuration: 0.75,     // seconds for fade-in of text/button
+  shortVideoThreshold: 6,  // seconds
+  shortVideoOffset: 4,     // logoshot starts at t=4s for ≤6s videos
+  longVideoPreroll: 3,     // logoshot covers last 3s for >6s videos
+  fadeInDuration: 0.75,    // seconds
 }
 
-// Layout coordinates per format (verified from Figma)
-// All values in pixels at 1x scale
+// Layout coordinates verified from Figma (all values in px at 1x)
+// Plates include legal text — no need to render it separately
 export const LAYOUT: Record<VideoFormat, FormatLayout> = {
   SQ: {
     frame: { w: 1080, h: 1080 },
-    plate:     { x: 0,   y: 852,  w: 1080, h: 228 },
-    logoBlock: { x: 32,  y: 870,  w: 480,  h: 120 },
-    titleLogo: { x: 32,  y: 32,   w: 350,  h: 130 },
-    offerText: { x: 32,  y: 740,  w: 1016, h: 100 },
-    legalText: { x: 32,  y: 1040, w: 1016, h: 36  },
+    EN: {
+      offerText: { x: 30,  y: 852, w: 560, h: 228 },
+      titleLogo: { x: 630, y: 752, w: 400, h: 200 },
+    },
+    AR: {
+      offerText: { x: 490, y: 852, w: 560, h: 228 },
+      titleLogo: { x: 50,  y: 752, w: 400, h: 200 },
+    },
     logoshotCta: {
-      watchNow: { x: 0, y: 580, w: 1080, h: 60  },
-      button:   { x: 0, y: 660, w: 1080, h: 120 },
+      watchNow: { x: 0, y: 608, w: 1080, h: 60  },
+      button:   { x: 0, y: 688, w: 1080, h: 130 },
     },
   },
   FEED: {
     frame: { w: 1080, h: 1350 },
-    plate:     { x: 0,   y: 1036, w: 1080, h: 314 },
-    logoBlock: { x: 32,  y: 1055, w: 480,  h: 120 },
-    titleLogo: { x: 32,  y: 32,   w: 350,  h: 130 },
-    offerText: { x: 32,  y: 1170, w: 1016, h: 100 },
-    legalText: { x: 32,  y: 1305, w: 1016, h: 36  },
+    EN: {
+      offerText: { x: 30,  y: 1036, w: 480, h: 313 },
+      titleLogo: { x: 550, y: 916,  w: 480, h: 240 },
+    },
+    AR: {
+      offerText: { x: 570, y: 1036, w: 480, h: 313 },
+      titleLogo: { x: 50,  y: 916,  w: 480, h: 240 },
+    },
     logoshotCta: {
-      watchNow: { x: 0, y: 720, w: 1080, h: 60  },
-      button:   { x: 0, y: 800, w: 1080, h: 120 },
+      watchNow: { x: 0, y: 748, w: 1080, h: 60  },
+      button:   { x: 0, y: 830, w: 1080, h: 130 },
     },
   },
   V: {
     frame: { w: 1080, h: 1920 },
-    plate:     { x: 0,   y: 1172, w: 1080, h: 748 },
-    logoBlock: { x: 32,  y: 1200, w: 480,  h: 120 },
-    titleLogo: { x: 32,  y: 32,   w: 350,  h: 130 },
-    offerText: { x: 32,  y: 1330, w: 1016, h: 100 },
-    legalText: { x: 32,  y: 1860, w: 1016, h: 36  },
+    EN: {
+      offerText: { x: 185, y: 1252, w: 710, h: 165 },
+      titleLogo: { x: 300, y: 1012, w: 480, h: 240 },
+    },
+    AR: {
+      offerText: { x: 185, y: 1252, w: 710, h: 165 },
+      titleLogo: { x: 300, y: 1012, w: 480, h: 240 },
+    },
     logoshotCta: {
-      watchNow: { x: 0, y: 1070, w: 1080, h: 60  },
-      button:   { x: 0, y: 1150, w: 1080, h: 120 },
+      watchNow: { x: 0, y: 1035, w: 1080, h: 60  },
+      button:   { x: 0, y: 1115, w: 1080, h: 130 },
     },
   },
   WIDE: {
     frame: { w: 1920, h: 1080 },
-    plate:     { x: 0,   y: 820,  w: 1920, h: 260 },
-    logoBlock: { x: 64,  y: 845,  w: 600,  h: 140 },
-    titleLogo: { x: 64,  y: 32,   w: 450,  h: 150 },
-    offerText: { x: 64,  y: 730,  w: 1800, h: 80  },
-    legalText: { x: 64,  y: 1040, w: 1800, h: 36  },
+    EN: {
+      offerText: { x: 500,  y: 0,  w: 720, h: 260 },
+      titleLogo: { x: 1270, y: 50, w: 600, h: 300 },
+    },
+    AR: {
+      offerText: { x: 700, y: 0,  w: 720, h: 260 },
+      titleLogo: { x: 50,  y: 50, w: 600, h: 300 },
+    },
     logoshotCta: {
-      watchNow: { x: 0, y: 600, w: 1920, h: 60  },
-      button:   { x: 0, y: 690, w: 1920, h: 120 },
+      watchNow: { x: 0, y: 630, w: 1920, h: 60  },
+      button:   { x: 0, y: 710, w: 1920, h: 130 },
     },
   },
 }
 
-// Plate PNG filenames: plates/plate_{FORMAT}_{CAMPAIGN}.png
-export function platePath(format: VideoFormat, campaign: CampaignType): string {
-  return path.join(PLATES_DIR, `plate_${format}_${campaign}.png`)
+// Plate filename: "{Campaign} {Language} {WxH}.png"
+const CAMPAIGN_NAMES: Record<CampaignType, string> = {
+  YangoPlay:         'Yango Play',
+  YangoPlay_noon:    'Yango Play + noon',
+  YangoPlay_talabat: 'Yango Play + Talabat',
 }
 
-// Logoshot MP4 filename mapping
+const FORMAT_DIMS: Record<VideoFormat, string> = {
+  SQ:   '1080x1080',
+  FEED: '1080x1350',
+  V:    '1080x1920',
+  WIDE: '1920x1080',
+}
+
+export function platePath(format: VideoFormat, campaign: CampaignType, lang: Language): string {
+  return path.join(PLATES_DIR, `${CAMPAIGN_NAMES[campaign]} ${lang} ${FORMAT_DIMS[format]}.png`)
+}
+
+// Logoshot files
 export const LOGOSHOT_FILES: Record<VideoFormat, string> = {
   SQ:   'Logoshot 1080x1080.mp4',
   FEED: 'Logoshot 1080x1350.mp4',
@@ -123,7 +140,7 @@ export const LOGOSHOT_FILES: Record<VideoFormat, string> = {
   WIDE: 'Logoshot 1920x1080.mp4',
 }
 
-export const LOGOSHOT_AUDIO: Record<'EN' | 'AR', string> = {
+export const LOGOSHOT_AUDIO: Record<Language, string> = {
   EN: 'Logoshot Audio EN.mp3',
   AR: 'Logoshot Audio AR.mp3',
 }
@@ -131,7 +148,7 @@ export const LOGOSHOT_AUDIO: Record<'EN' | 'AR', string> = {
 // Video format detection: keyword → format
 export const FORMAT_KEYWORDS: Array<{ keywords: string[]; format: VideoFormat }> = [
   { keywords: ['wide', 'landscape', '1920x1080', '1920_1080'], format: 'WIDE' },
-  { keywords: ['vertical', 'story', 'stories', '1080x1920', '1080_1920'], format: 'V' },
-  { keywords: ['square', 'sq', '1080x1080', '1080_1080'], format: 'SQ' },
+  { keywords: ['vertical', 'story', 'stories', '1080x1920', '1080_1920'], format: 'V'    },
+  { keywords: ['square', 'sq', '1080x1080', '1080_1080'],                format: 'SQ'   },
 ]
-// FEED is derived from SQ — no dedicated video file
+// FEED has no dedicated source video — reuses SQ

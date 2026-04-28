@@ -63,8 +63,17 @@ export default function Home() {
             </Field>
           </div>
 
-          <Field label="Trailer cuts (.mp4)" hint="Select all formats at once (SQ, WIDE, V)">
-            <input name="videos" type="file" accept="video/mp4,video/quicktime" multiple required className={inputCls} />
+          <Field label="Yandex Disk URL" hint="Public folder link with trailer cuts — or upload files below">
+            <input
+              name="diskUrl"
+              type="url"
+              placeholder="https://disk.yandex.com/d/…"
+              className={inputCls + ' placeholder:text-gray-600'}
+            />
+          </Field>
+
+          <Field label="Trailer cuts (.mp4)" hint="Upload files directly (leave empty if using Disk URL above)">
+            <input name="videos" type="file" accept="video/mp4,video/quicktime" multiple className={inputCls} />
           </Field>
 
           <details className="border border-gray-700 rounded-lg p-4">
