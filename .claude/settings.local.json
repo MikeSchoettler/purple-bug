@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__figma-developer-mcp__get_figma_data",
+      "Bash(python3 *)",
+      "Bash(curl -s \"https://cloud-api.yandex.net/v1/disk/public/resources?public_key=https://disk.yandex.ru/d/EoyuDcbHpvAtCQ&limit=100\")",
+      "Bash(curl *)",
+      "Bash(gh auth *)",
+      "Bash(npm --version)",
+      "Bash(npx create-next-app@latest *)",
+      "Bash(cp -r /Users/schettler/purple-bug/. /Users/schettler/Purple_bug/)",
+      "Bash(rm -rf /Users/schettler/purple-bug)",
+      "Bash(npm install *)",
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git config *)"
+    ]
+  }
+}
