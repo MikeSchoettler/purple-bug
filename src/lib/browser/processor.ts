@@ -4,7 +4,7 @@ export { zipSync }
 import type { VideoFormat, Language, CampaignType, TextVersion } from '../types'
 import {
   LAYOUT, LOGOSHOT_TIMING, LOGOSHOT_FILES, LOGOSHOT_AUDIO,
-  FORMAT_KEYWORDS, plateName,
+  plateName,
 } from '../constants-browser'
 import {
   ensureFonts, renderOfferText, renderWatchNowText, renderCtaButton, fitLogo,
@@ -85,13 +85,7 @@ export async function loadFFmpeg(onProgress?: (pct: number) => void) {
   return ffmpegLoading
 }
 
-export async function detectFormat(
-  name: string, width: number, height: number
-): Promise<VideoFormat | null> {
-  const lower = name.toLowerCase()
-  for (const { keywords, format } of FORMAT_KEYWORDS) {
-    if (keywords.some(k => lower.includes(k))) return format
-  }
+export function detectFormat(width: number, height: number): VideoFormat | null {
   if (width === 1920 && height === 1080) return 'WIDE'
   if (width === 1080 && height === 1920) return 'V'
   if (width === 1080 && height === 1080) return 'SQ'

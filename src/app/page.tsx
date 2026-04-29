@@ -64,7 +64,7 @@ export default function Home() {
 
     try {
       const { parseTaskFile }                                                    = await import('@/lib/parser')
-      const { processVideoFile, mapVideoVersionsToText, loadFFmpeg: loadFF,
+      const { processVideoFile, loadFFmpeg: loadFF,
               zipSync: zipSyncFn }                                               = await import('@/lib/browser/processor')
 
       const taskConfig = parseTaskFile(taskText, {
@@ -99,16 +99,28 @@ export default function Home() {
         if (pct === 100) upsertOp('wasm', 'FFmpeg ready', 'done')
       })
 
-      // Helper: extract version number from filename
-      const parseVNum = (name: string) => {
-        const m = name.match(/(?:version\s*|_v?|v)(\d+)/i)
-        return m ? parseInt(m[1], 10) : 1
-      }
-
       const outputs: Record<string, Uint8Array> = {}
       let totalProcessed = 0
-      let totalSkipped   = 0
       let totalBadFormat = 0
+
+      // Helper: download + detect format by metadata + process for all text versions
+      const processOneFile = async (
+        name: string, data: Uint8Array, i: number, total: number
+      ) => {
+        const fake = new File([data.buffer as ArrayBuffer], name, { type: 'video/mp4' })
+        const meta = await getVideoMeta(fake)
+        const fmt  = detectFormat(meta.width, meta.height)
+        if (!fmt) {
+          addLog(`  ✗ ${name}: unsupported resolution ${meta.width}×${meta.height}`)
+          totalBadFormat++
+          return
+        }
+        addLog(`  ${i}/${total} ${meta.width}×${meta.height} → ${fmt} (${meta.duration.toFixed(1)}s)`)
+        const video: BrowserVideoFile = { name, format: fmt, version: 1, data, ...meta }
+        const partial = await processVideoFile(ff, browserConfig, video, taskConfig.versions, onMsg)
+        Object.assign(outputs, partial)
+        totalProcessed++
+      }
 
       // 2a. Disk videos — fetch list, then download + process one at a time
       if (diskUrl) {
@@ -121,38 +133,14 @@ export default function Home() {
 
         const files = json.files as { name: string; downloadUrl: string }[]
         upsertOp('disk', `${files.length} file(s) found`, 'done')
-
-        const videoVersions = files.map(f => parseVNum(f.name))
-        const versionMap    = mapVideoVersionsToText(videoVersions, taskConfig.versions)
-
         setStage('processing')
+
         for (let i = 0; i < files.length; i++) {
           const { name, downloadUrl: dlUrl } = files[i]
-          const format = await detectFormat(name, 0, 0)  // try name-based first
-          const vNum   = parseVNum(name)
-          const textVersions = versionMap.get(vNum) ?? []
-
-          if (textVersions.length === 0) {
-            addLog(`  skip ${name} (v${vNum} not in task versions)`)
-            totalSkipped++
-            continue
-          }
-
           upsertOp('disk', `↓ ${i + 1}/${files.length}: ${name}`, 'running')
           addLog(`↓ ${name}`)
-          const data   = new Uint8Array(await (await fetch(dlUrl)).arrayBuffer())
-          const fake   = new File([data], name, { type: 'video/mp4' })
-          const meta   = await getVideoMeta(fake)
-          const fmt    = format ?? await detectFormat(name, meta.width, meta.height)
-          if (!fmt) { addLog(`  ✗ unknown format: ${name} (${meta.width}×${meta.height})`); totalBadFormat++; continue }
-
-          const partial = await processVideoFile(
-            ff, browserConfig,
-            { name, format: fmt, version: vNum, data, ...meta },
-            textVersions, onMsg,
-          )
-          Object.assign(outputs, partial)
-          totalProcessed++
+          const data = new Uint8Array(await (await fetch(dlUrl)).arrayBuffer())
+          await processOneFile(name, data, i + 1, files.length)
         }
         upsertOp('disk', 'All disk videos done', 'done')
       }
@@ -160,34 +148,17 @@ export default function Home() {
       // 2b. Locally uploaded files — process one at a time
       if (videoFiles.length > 0) {
         setStage('processing')
-        const videoVersions = videoFiles.map(f => parseVNum(f.name))
-        const versionMap    = mapVideoVersionsToText(videoVersions, taskConfig.versions)
-
-        for (const file of videoFiles) {
-          const vNum = parseVNum(file.name)
-          const textVersions = versionMap.get(vNum) ?? []
-          if (textVersions.length === 0) { addLog(`  skip ${file.name} (v${vNum} not in task versions)`); totalSkipped++; continue }
-
-          const meta   = await getVideoMeta(file)
-          const format = await detectFormat(file.name, meta.width, meta.height)
-          if (!format) { addLog(`✗ unknown format: ${file.name} (${meta.width}×${meta.height})`); totalBadFormat++; continue }
-
-          const data    = new Uint8Array(await file.arrayBuffer())
-          const partial = await processVideoFile(
-            ff, browserConfig,
-            { name: file.name, format, version: vNum, data, ...meta },
-            textVersions, onMsg,
-          )
-          Object.assign(outputs, partial)
-          totalProcessed++
+        for (let i = 0; i < videoFiles.length; i++) {
+          const file = videoFiles[i]
+          addLog(`↑ ${file.name}`)
+          const data = new Uint8Array(await file.arrayBuffer())
+          await processOneFile(file.name, data, i + 1, videoFiles.length)
         }
       }
 
       if (totalProcessed === 0) {
         if (totalBadFormat > 0)
-          throw new Error(`No video files matched known formats (SQ/WIDE/V). Check filenames contain "square", "wide", or "vertical".`)
-        if (totalSkipped > 0)
-          throw new Error(`All ${totalSkipped} video file(s) were skipped — video version numbers don't match task text versions. Check that "# Version N" numbers in the task text match "Version NN" in the video filenames.`)
+          throw new Error(`No videos matched supported resolutions (1080×1080, 1920×1080, 1080×1920). Got: see log.`)
         throw new Error('No video files found or fetched')
       }
 
