@@ -42,12 +42,16 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'No video files found at this URL' }, { status: 404 })
     }
 
+    const origin = req.headers.get('origin') ?? req.nextUrl.origin
+
     const files = await Promise.all(
       videoItems.map(async item => {
         const dl = await apiGet<{ href: string }>(
           `${API_BASE}/resources/download?public_key=${encodeURIComponent(publicKey)}&path=${encodeURIComponent(item.path)}`
         )
-        return { name: item.name, downloadUrl: dl.href }
+        // Wrap in same-origin proxy so browser fetch doesn't hit Yandex Disk CORS
+        const proxied = `${origin}/api/file-proxy?url=${encodeURIComponent(dl.href)}`
+        return { name: item.name, downloadUrl: proxied }
       })
     )
 
