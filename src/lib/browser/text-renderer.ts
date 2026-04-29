@@ -207,7 +207,7 @@ export async function compositeLogoshotOverlay(
 }
 
 function pngToImage(data: Uint8Array): Promise<HTMLImageElement> {
-  const blob = new Blob([data], { type: 'image/png' })
+  const blob = new Blob([data.buffer as ArrayBuffer], { type: 'image/png' })
   const url  = URL.createObjectURL(blob)
   const img  = new Image()
   img.src    = url
