@@ -6,54 +6,71 @@ import { detectFormat, getVideoMeta } from '@/lib/browser/processor'
 
 type Stage = 'idle' | 'loadingWasm' | 'scanning' | 'processing' | 'done' | 'error'
 
+interface Op {
+  id: string
+  label: string
+  status: 'waiting' | 'running' | 'done' | 'error'
+}
+
 export default function Home() {
-  const [stage, setStage]       = useState<Stage>('idle')
-  const [log, setLog]           = useState<string[]>([])
-  const [wasmPct, setWasmPct]   = useState(0)
+  const [stage, setStage]         = useState<Stage>('idle')
+  const [ops, setOps]             = useState<Op[]>([])
+  const [log, setLog]             = useState<string[]>([])
+  const [wasmPct, setWasmPct]     = useState(0)
+  const [showLog, setShowLog]     = useState(false)
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
-  const [zipName, setZipName]   = useState('')
-  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [zipName, setZipName]     = useState('')
+  const [errorMsg, setErrorMsg]   = useState<string | null>(null)
+  const [logoENName, setLogoENName] = useState('')
+  const [logoARName, setLogoARName] = useState('')
+  const [videoNames, setVideoNames] = useState<string[]>([])
   const formRef = useRef<HTMLFormElement>(null)
 
-  const addLog = useCallback((msg: string) => setLog(prev => [...prev, msg]), [])
+  const addLog = useCallback((msg: string) => setLog(p => [...p, msg]), [])
+
+  const upsertOp = useCallback((id: string, label: string, status: Op['status']) => {
+    setOps(prev => {
+      const exists = prev.find(o => o.id === id)
+      if (exists) return prev.map(o => o.id === id ? { ...o, label, status } : o)
+      return [...prev, { id, label, status }]
+    })
+  }, [])
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setStage('idle')
     setLog([])
+    setOps([])
     setDownloadUrl(null)
     setErrorMsg(null)
     setWasmPct(0)
 
     const fd = new FormData(e.currentTarget)
-    const titleName  = (fd.get('titleName') as string).trim()
-    const taskText   = (fd.get('taskText')  as string).trim()
-    const campaignVal = fd.get('campaign') as string
-    const logoEN    = fd.get('logoEN')    as File | null
-    const logoAR    = fd.get('logoAR')    as File | null
-    const diskUrl   = (fd.get('diskUrl')  as string).trim()
-    const videoFiles = (fd.getAll('videos') as File[]).filter(f => f.size > 0)
+    const titleName   = (fd.get('titleName')  as string).trim()
+    const taskText    = (fd.get('taskText')   as string).trim()
+    const campaignVal = fd.get('campaign')    as string
+    const logoEN      = fd.get('logoEN')      as File | null
+    const logoAR      = fd.get('logoAR')      as File | null
+    const diskUrl     = (fd.get('diskUrl')    as string).trim()
+    const videoFiles  = (fd.getAll('videos')  as File[]).filter(f => f.size > 0)
 
-    if (!titleName) { setErrorMsg('Show/film title is required'); return }
-    if (!taskText)  { setErrorMsg('Paste the task text first'); return }
-    if (!logoEN || logoEN.size === 0) { setErrorMsg('Logo EN is required'); return }
-    if (!logoAR || logoAR.size === 0) { setErrorMsg('Logo AR is required'); return }
-    if (!diskUrl && videoFiles.length === 0) {
-      setErrorMsg('Provide a Yandex Disk URL or upload video files'); return
-    }
+    if (!titleName)  return setErrorMsg('Show / film title is required')
+    if (!taskText)   return setErrorMsg('Task text is required')
+    if (!logoEN?.size) return setErrorMsg('Logo EN is required')
+    if (!logoAR?.size) return setErrorMsg('Logo AR is required')
+    if (!diskUrl && videoFiles.length === 0)
+      return setErrorMsg('Provide a Yandex Disk URL or upload video files')
 
     try {
-      // Import browser modules lazily (avoids SSR issues)
-      const { parseTaskFile }      = await import('@/lib/parser')
-      const { runBrowserPipeline, loadFFmpeg } = await import('@/lib/browser/processor')
-      // Parse task (versions only; title/campaign come from UI)
+      const { parseTaskFile }                          = await import('@/lib/parser')
+      const { runBrowserPipeline, loadFFmpeg: loadFF } = await import('@/lib/browser/processor')
+
       const taskConfig = parseTaskFile(taskText, {
         titleLogoEN: '__browser__',
         titleLogoAR: '__browser__',
         titleName,
         campaign: campaignVal as 'YangoPlay' | 'YangoPlay_noon' | 'YangoPlay_talabat',
       })
-
       const browserConfig: BrowserTaskConfig = {
         titleName: taskConfig.titleName,
         campaign:  taskConfig.campaign,
@@ -62,59 +79,74 @@ export default function Home() {
         logoAR: logoAR!,
       }
 
+      // 1. Load FFmpeg
       setStage('loadingWasm')
-      addLog('Loading FFmpeg WASM (first time ~20 MB)...')
-      await loadFFmpeg(pct => { setWasmPct(pct); if (pct === 100) addLog('FFmpeg ready.') })
+      upsertOp('wasm', 'Loading FFmpeg…', 'running')
+      await loadFF(pct => {
+        setWasmPct(pct)
+        if (pct === 100) upsertOp('wasm', 'FFmpeg ready', 'done')
+      })
 
-      // Collect video files
+      // 2. Collect videos
       setStage('scanning')
-      let allVideos: BrowserVideoFile[] = []
+      const allVideos: BrowserVideoFile[] = []
 
       if (diskUrl) {
-        addLog(`Fetching file list from Yandex Disk...`)
-        const res = await fetch(`/api/disk-proxy?diskUrl=${encodeURIComponent(diskUrl)}`)
+        upsertOp('disk', 'Fetching files from Yandex Disk…', 'running')
+        addLog('Fetching file list from Yandex Disk...')
+        const res  = await fetch(`/api/disk-proxy?diskUrl=${encodeURIComponent(diskUrl)}`)
         const json = await res.json()
         if (!res.ok) throw new Error(json.error ?? 'Disk proxy error')
 
-        addLog(`Downloading ${json.files.length} video(s)...`)
+        upsertOp('disk', `Downloading ${json.files.length} video(s)…`, 'running')
         for (const { name, downloadUrl: dlUrl } of json.files as { name: string; downloadUrl: string }[]) {
-          addLog(`  ↓ ${name}`)
-          const data = new Uint8Array(await (await fetch(dlUrl)).arrayBuffer())
-          const fakeFile = new File([data], name, { type: 'video/mp4' })
-          const meta = await getVideoMeta(fakeFile)
+          addLog(`↓ ${name}`)
+          const data   = new Uint8Array(await (await fetch(dlUrl)).arrayBuffer())
+          const fake   = new File([data], name, { type: 'video/mp4' })
+          const meta   = await getVideoMeta(fake)
           const format = await detectFormat(name, meta.width, meta.height)
-          if (!format) { addLog(`  ✗ Unknown format: ${name}`); continue }
-          const vMatch = name.match(/(?:version\s*|_v?|v)(\d+)/i)
-          const version = vMatch ? parseInt(vMatch[1], 10) : 1
-          allVideos.push({ name, format, version, data, ...meta })
-          addLog(`  ✓ ${name} → ${format} v${version}`)
+          if (!format) { addLog(`  ✗ unknown format: ${name}`); continue }
+          const vNum   = name.match(/(?:version\s*|_v?|v)(\d+)/i)
+          allVideos.push({ name, format, version: vNum ? parseInt(vNum[1], 10) : 1, data, ...meta })
         }
+        upsertOp('disk', `${allVideos.length} video(s) ready`, 'done')
       }
 
       for (const file of videoFiles) {
-        addLog(`Scanning: ${file.name}`)
-        const meta = await getVideoMeta(file)
+        const meta   = await getVideoMeta(file)
         const format = await detectFormat(file.name, meta.width, meta.height)
-        if (!format) { addLog(`  ✗ Unknown format: ${file.name}`); continue }
-        const vMatch = file.name.match(/(?:version\s*|_v?|v)(\d+)/i)
-        const version = vMatch ? parseInt(vMatch[1], 10) : 1
-        const data = new Uint8Array(await file.arrayBuffer())
-        allVideos.push({ name: file.name, format, version, data, ...meta })
-        addLog(`  ✓ ${file.name} → ${format} v${version}`)
+        if (!format) { addLog(`✗ unknown format: ${file.name}`); continue }
+        const vNum   = file.name.match(/(?:version\s*|_v?|v)(\d+)/i)
+        allVideos.push({
+          name: file.name, format,
+          version: vNum ? parseInt(vNum[1], 10) : 1,
+          data: new Uint8Array(await file.arrayBuffer()), ...meta,
+        })
       }
 
       if (allVideos.length === 0) throw new Error('No recognisable video files found')
 
+      // 3. Process
       setStage('processing')
-      const zip = await runBrowserPipeline(browserConfig, allVideos, addLog, pct => setWasmPct(pct))
+      const zip = await runBrowserPipeline(
+        browserConfig,
+        allVideos,
+        msg => {
+          addLog(msg)
+          const jobMatch = msg.match(/Processing:\s*(.+)/)
+          if (jobMatch) upsertOp('job', jobMatch[1], 'running')
+          const doneMatch = msg.match(/✓\s*(.+\.mp4)/)
+          if (doneMatch) upsertOp('job', doneMatch[1], 'done')
+          if (msg.startsWith('Packing ZIP')) upsertOp('zip', 'Packing ZIP…', 'running')
+          if (msg.startsWith('Done!'))       upsertOp('zip', msg, 'done')
+        },
+        pct => setWasmPct(pct),
+      )
 
       const blob = new Blob([zip.buffer as ArrayBuffer], { type: 'application/zip' })
-      const url = URL.createObjectURL(blob)
-      const name = `${browserConfig.titleName}_creatives.zip`
-      setDownloadUrl(url)
-      setZipName(name)
+      setDownloadUrl(URL.createObjectURL(blob))
+      setZipName(`${browserConfig.titleName}_creatives.zip`)
       setStage('done')
-      addLog(`Done! ${(zip.byteLength / 1024 / 1024).toFixed(1)} MB`)
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err))
       setStage('error')
@@ -124,112 +156,162 @@ export default function Home() {
   const busy = stage === 'loadingWasm' || stage === 'scanning' || stage === 'processing'
 
   return (
-    <main className="min-h-screen bg-gray-950 text-white p-8">
-      <div className="max-w-2xl mx-auto">
-        <h1 className="text-2xl font-bold mb-1">Purple Bug</h1>
-        <p className="text-gray-500 mb-8 text-sm">Yango Play creative assembly · runs entirely in your browser</p>
+    <main className="min-h-screen bg-zinc-950 text-zinc-100">
+      <div className="max-w-xl mx-auto px-6 py-12">
 
-        <form ref={formRef} onSubmit={handleSubmit} className="space-y-5">
+        {/* Header */}
+        <div className="mb-10">
+          <h1 className="text-xl font-semibold tracking-tight">Purple Bug</h1>
+          <p className="text-zinc-500 text-sm mt-1">Yango Play creative assembly — runs in your browser</p>
+        </div>
 
-          <Field label="Show / film title">
-            <input
-              name="titleName"
-              type="text"
-              placeholder="Ein Sehrya"
-              required
-              className={inputCls.replace('cursor-pointer', '')}
-            />
-          </Field>
+        <form ref={formRef} onSubmit={handleSubmit} className="space-y-3">
 
-          <Field label="Task (paste text or upload .md)">
-            <textarea
-              name="taskText"
-              rows={6}
-              placeholder="# Version 1&#10;## Main text&#10;...&#10;## CTA&#10;..."
-              className="w-full text-sm text-gray-300 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 font-mono resize-y"
-            />
-            <label className="mt-1 flex items-center gap-2 text-xs text-gray-500 cursor-pointer">
-              <span>or upload .md file:</span>
-              <input
-                type="file"
-                accept=".md,.txt"
-                className="text-xs text-gray-400"
-                onChange={async e => {
-                  const f = e.target.files?.[0]
-                  if (!f) return
-                  const text = await f.text()
-                  const ta = formRef.current?.querySelector<HTMLTextAreaElement>('textarea[name=taskText]')
-                  if (ta) ta.value = text
-                }}
-              />
-            </label>
-          </Field>
-
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Title Logo EN (.png)">
-              <input name="logoEN" type="file" accept="image/png" required className={inputCls} />
-            </Field>
-            <Field label="Title Logo AR (.png)">
-              <input name="logoAR" type="file" accept="image/png" required className={inputCls} />
-            </Field>
-          </div>
-
-          <Field label="Yandex Disk URL" hint="Paste public folder link with trailer cuts">
-            <input
-              name="diskUrl"
-              type="url"
-              placeholder="https://disk.yandex.com/d/…"
-              className={inputCls + ' placeholder:text-gray-600'}
-            />
-          </Field>
-
-          <Field label="Upload videos instead" hint="Select .mp4 files directly (optional if Disk URL provided)">
-            <input name="videos" type="file" accept="video/mp4,video/quicktime" multiple className={inputCls} />
-          </Field>
-
-          <details className="border border-gray-800 rounded-lg p-4">
-            <summary className="cursor-pointer text-xs text-gray-500 hover:text-gray-300">
-              Campaign override (optional)
-            </summary>
-            <div className="mt-3">
-              <Field label="Campaign">
-                <select name="campaign" className="w-full text-sm bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-gray-300">
+          {/* Section 1: Project */}
+          <Section n={1} title="Project">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Show title</Label>
+                <Input name="titleName" type="text" placeholder="Ein Sehrya" required />
+              </div>
+              <div>
+                <Label>Campaign</Label>
+                <select
+                  name="campaign"
+                  className="w-full text-sm bg-zinc-900 border border-zinc-800 hover:border-zinc-600 focus:border-purple-500 focus:outline-none rounded-lg px-3 py-2 text-zinc-200 transition-colors"
+                >
                   <option value="YangoPlay">Yango Play</option>
                   <option value="YangoPlay_noon">Yango Play + noon</option>
                   <option value="YangoPlay_talabat">Yango Play + Talabat</option>
                 </select>
-              </Field>
+              </div>
             </div>
-          </details>
+          </Section>
 
+          {/* Section 2: Logos */}
+          <Section n={2} title="Logos">
+            <div className="grid grid-cols-2 gap-3">
+              <FileZone
+                name="logoEN" label="English logo" accept="image/png"
+                hint=".png with transparency"
+                fileName={logoENName}
+                onChange={f => setLogoENName(f?.name ?? '')}
+              />
+              <FileZone
+                name="logoAR" label="Arabic logo" accept="image/png"
+                hint=".png with transparency"
+                fileName={logoARName}
+                onChange={f => setLogoARName(f?.name ?? '')}
+              />
+            </div>
+          </Section>
+
+          {/* Section 3: Videos */}
+          <Section n={3} title="Trailer cuts">
+            <div>
+              <Label>Yandex Disk folder URL</Label>
+              <input
+                name="diskUrl"
+                type="url"
+                placeholder="https://disk.yandex.com/d/…"
+                className="w-full text-sm bg-zinc-900 border border-zinc-800 hover:border-zinc-600 focus:border-purple-500 focus:outline-none rounded-lg px-3 py-2 text-zinc-200 placeholder:text-zinc-700 transition-colors"
+              />
+            </div>
+            <div className="mt-3">
+              <Label hint="Optional if Disk URL is filled">Upload .mp4 files directly</Label>
+              <FileZone
+                name="videos" label="Drop MP4 files" accept="video/mp4,video/quicktime" multiple
+                hint="SQ + WIDE + V at once"
+                fileName={videoNames.length > 0 ? `${videoNames.length} file(s)` : ''}
+                onChange={(_, files) => setVideoNames(files ? Array.from(files).map(f => f.name) : [])}
+              />
+            </div>
+          </Section>
+
+          {/* Section 4: Task */}
+          <Section n={4} title="Task text">
+            <textarea
+              name="taskText"
+              rows={7}
+              placeholder={'# Version 1\n## Main text\nText here\nنص هنا\n## CTA\nWatch now\nشاهد الآن'}
+              className="w-full text-sm bg-zinc-900 border border-zinc-800 hover:border-zinc-600 focus:border-purple-500 focus:outline-none rounded-lg px-3 py-2.5 text-zinc-200 placeholder:text-zinc-700 font-mono resize-y transition-colors"
+            />
+            <button
+              type="button"
+              className="mt-1 text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+              onClick={() => {
+                const input = document.createElement('input')
+                input.type = 'file'; input.accept = '.md,.txt'
+                input.onchange = async () => {
+                  const f = input.files?.[0]; if (!f) return
+                  const ta = formRef.current?.querySelector<HTMLTextAreaElement>('textarea[name=taskText]')
+                  if (ta) ta.value = await f.text()
+                }
+                input.click()
+              }}
+            >
+              Upload .md file instead ↑
+            </button>
+          </Section>
+
+          {/* Submit */}
           <button
             type="submit"
             disabled={busy}
-            className="w-full py-3 px-6 bg-purple-700 hover:bg-purple-600 disabled:bg-gray-800 disabled:cursor-not-allowed rounded-lg font-semibold transition-colors"
+            className="w-full mt-2 py-3 px-6 bg-purple-600 hover:bg-purple-500 active:scale-[0.99] disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed rounded-xl font-medium text-sm transition-all"
           >
-            {busy ? stageLabel(stage, wasmPct) : 'Generate creatives'}
+            {busy ? <BusyLabel stage={stage} pct={wasmPct} /> : 'Generate creatives →'}
           </button>
         </form>
 
-        {log.length > 0 && (
-          <div className="mt-6 bg-gray-900 rounded-lg p-4 font-mono text-xs text-gray-300 space-y-0.5 max-h-64 overflow-y-auto">
-            {log.map((l, i) => <div key={i}>{l}</div>)}
+        {/* Progress */}
+        {ops.length > 0 && (
+          <div className="mt-6 rounded-xl border border-zinc-800 overflow-hidden">
+            <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
+              <span className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Progress</span>
+              <button
+                onClick={() => setShowLog(s => !s)}
+                className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+              >
+                {showLog ? 'Hide log' : 'Show log'}
+              </button>
+            </div>
+            <div className="divide-y divide-zinc-900">
+              {ops.map(op => (
+                <div key={op.id} className="flex items-center gap-3 px-4 py-2.5">
+                  <OpIcon status={op.status} pct={op.status === 'running' && op.id === 'wasm' ? wasmPct : undefined} />
+                  <span className={`text-sm ${op.status === 'running' ? 'text-zinc-100' : op.status === 'done' ? 'text-zinc-400' : op.status === 'error' ? 'text-red-400' : 'text-zinc-600'}`}>
+                    {op.label}
+                  </span>
+                </div>
+              ))}
+            </div>
+            {showLog && log.length > 0 && (
+              <div className="border-t border-zinc-800 bg-zinc-950 px-4 py-3 font-mono text-xs text-zinc-500 space-y-0.5 max-h-48 overflow-y-auto">
+                {log.map((l, i) => <div key={i}>{l}</div>)}
+              </div>
+            )}
           </div>
         )}
 
+        {/* Error */}
         {stage === 'error' && errorMsg && (
-          <div className="mt-4 bg-red-950 border border-red-800 rounded-lg p-4 text-red-300 text-sm">
+          <div className="mt-4 rounded-xl border border-red-900 bg-red-950/50 px-4 py-3 text-sm text-red-400">
             {errorMsg}
           </div>
         )}
 
+        {/* Done */}
         {stage === 'done' && downloadUrl && (
-          <div className="mt-4 bg-green-950 border border-green-800 rounded-lg p-4 flex items-center justify-between">
-            <p className="text-green-300 text-sm">All creatives ready!</p>
+          <div className="mt-4 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-4 flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-zinc-100">Ready to download</p>
+              <p className="text-xs text-zinc-500 mt-0.5">{zipName}</p>
+            </div>
             <a
               href={downloadUrl}
               download={zipName}
-              className="py-2 px-5 bg-green-700 hover:bg-green-600 rounded-lg font-semibold text-sm transition-colors"
+              className="py-2 px-5 bg-purple-600 hover:bg-purple-500 active:scale-[0.99] rounded-lg text-sm font-medium transition-all"
             >
               Download ZIP
             </a>
@@ -240,21 +322,100 @@ export default function Home() {
   )
 }
 
-function stageLabel(stage: Stage, pct: number): string {
-  if (stage === 'loadingWasm') return pct < 100 ? `Loading FFmpeg… ${pct}%` : 'FFmpeg ready, scanning…'
-  if (stage === 'scanning')    return 'Scanning videos…'
-  if (stage === 'processing')  return 'Processing…'
-  return '…'
-}
+// ── Sub-components ─────────────────────────────────────────────────────────────
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Section({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
   return (
-    <div>
-      <label className="block text-sm font-medium text-gray-300 mb-1">{label}</label>
-      {hint && <p className="text-xs text-gray-500 mb-1">{hint}</p>}
-      {children}
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 overflow-hidden">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-zinc-800/60">
+        <span className="flex items-center justify-center w-5 h-5 rounded-full bg-zinc-800 text-zinc-400 text-xs font-medium tabular-nums">
+          {n}
+        </span>
+        <span className="text-sm font-medium text-zinc-300">{title}</span>
+      </div>
+      <div className="px-4 py-4">{children}</div>
     </div>
   )
 }
 
-const inputCls = 'w-full text-sm text-gray-300 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:bg-purple-800 file:text-white file:text-xs cursor-pointer'
+function Label({ children, hint }: { children: React.ReactNode; hint?: string }) {
+  return (
+    <div className="flex items-baseline gap-2 mb-1.5">
+      <span className="text-xs font-medium text-zinc-400">{children}</span>
+      {hint && <span className="text-xs text-zinc-600">{hint}</span>}
+    </div>
+  )
+}
+
+function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className="w-full text-sm bg-zinc-950 border border-zinc-800 hover:border-zinc-600 focus:border-purple-500 focus:outline-none rounded-lg px-3 py-2 text-zinc-200 placeholder:text-zinc-700 transition-colors"
+    />
+  )
+}
+
+interface FileZoneProps {
+  name: string
+  label: string
+  accept: string
+  hint?: string
+  multiple?: boolean
+  fileName: string
+  onChange: (file: File | null, files?: FileList) => void
+}
+
+function FileZone({ name, label, accept, hint, multiple, fileName, onChange }: FileZoneProps) {
+  return (
+    <label className="group relative flex flex-col items-center justify-center gap-1 w-full h-20 border border-dashed border-zinc-800 hover:border-zinc-600 rounded-xl cursor-pointer transition-colors">
+      <input
+        type="file" name={name} accept={accept} multiple={multiple} className="sr-only"
+        onChange={e => onChange(e.target.files?.[0] ?? null, e.target.files ?? undefined)}
+      />
+      {fileName ? (
+        <span className="text-xs text-purple-400 px-2 text-center leading-tight">{fileName}</span>
+      ) : (
+        <>
+          <UploadIcon />
+          <span className="text-xs text-zinc-600 group-hover:text-zinc-400 transition-colors">{label}</span>
+          {hint && <span className="text-[10px] text-zinc-700">{hint}</span>}
+        </>
+      )}
+    </label>
+  )
+}
+
+function OpIcon({ status, pct }: { status: Op['status']; pct?: number }) {
+  if (status === 'done')    return <span className="text-zinc-500 w-4 text-center text-xs">✓</span>
+  if (status === 'error')   return <span className="text-red-500 w-4 text-center text-xs">✗</span>
+  if (status === 'waiting') return <span className="w-4 h-4 rounded-full border border-zinc-800 flex-shrink-0" />
+  // running
+  return (
+    <span className="relative flex-shrink-0 w-4 h-4">
+      <span className="absolute inset-0 rounded-full border-2 border-zinc-800" />
+      <span
+        className="absolute inset-0 rounded-full border-2 border-t-purple-500 animate-spin"
+        style={pct != null && pct < 100 ? {
+          background: `conic-gradient(rgb(147 51 234) ${pct * 3.6}deg, transparent 0deg)`,
+          borderRadius: '50%', border: 'none',
+        } : undefined}
+      />
+    </span>
+  )
+}
+
+function BusyLabel({ stage, pct }: { stage: Stage; pct: number }) {
+  if (stage === 'loadingWasm') return <>{pct > 0 && pct < 100 ? `Loading FFmpeg ${pct}%` : 'Loading FFmpeg…'}</>
+  if (stage === 'scanning')    return <>Downloading videos…</>
+  if (stage === 'processing')  return <>Processing…</>
+  return <>…</>
+}
+
+function UploadIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="text-zinc-600 group-hover:text-zinc-400 transition-colors">
+      <path d="M8 10V3M8 3L5 6M8 3l3 3M2 12h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  )
+}

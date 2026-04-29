@@ -37,15 +37,25 @@ export async function loadFFmpeg(onProgress?: (pct: number) => void) {
   if (ffmpegLoading) return ffmpegLoading
 
   ffmpegLoading = (async () => {
-    const { FFmpeg }    = await import('@ffmpeg/ffmpeg')
-    const { toBlobURL } = await import('@ffmpeg/util')
+    // new Function bypasses webpack/turbopack static analysis entirely;
+    // packages are loaded from CDN at runtime so the bundler never sees them.
+    // eslint-disable-next-line no-new-func
+    const dynImport = new Function('u', 'return import(u)') as (u: string) => Promise<any>
+
+    const [ffmpegMod, utilMod] = await Promise.all([
+      dynImport('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/esm/index.js'),
+      dynImport('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/dist/esm/index.js'),
+    ])
+
+    const { FFmpeg }    = ffmpegMod
+    const { toBlobURL } = utilMod
 
     const ff = new FFmpeg()
     ff.on('progress', ({ progress }: { progress: number }) =>
       onProgress?.(Math.round(progress * 100))
     )
 
-    const base = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm'
+    const base = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.9/dist/esm'
     await ff.load({
       coreURL:  await toBlobURL(`${base}/ffmpeg-core.js`,   'text/javascript'),
       wasmURL:  await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm'),
