@@ -15,7 +15,7 @@ function insertCurrencyNBSP(text: string, lang: Language): string {
 
 function offerFontSize(text: string, isWide: boolean): number {
   const len = text.length
-  if (len < 13) return isWide ? 120 : 100
+  if (len < 15) return isWide ? 120 : 100
   if (len < 30) return isWide ? 90  : 80
   return isWide ? 72 : 64
 }

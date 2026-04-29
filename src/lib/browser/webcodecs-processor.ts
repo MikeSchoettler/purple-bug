@@ -242,6 +242,9 @@ async function decodeSegment(
   await dec.flush()
   dec.close()
 
+  // Sort into display order (CTS) — B-frames arrive in decode order but have
+  // non-monotonic CTS values; muxer requires monotonically increasing timestamps.
+  frames.sort((a, b) => a.timestamp - b.timestamp)
   return frames
 }
 
@@ -259,9 +262,10 @@ async function encodeFrames(
   const offscreen = new OffscreenCanvas(outputW, outputH)
   const ctx = offscreen.getContext('2d')!
 
-  for (const frame of frames) {
-    // Read properties before close() — after close() all VideoFrame props return null
-    const ts = frame.timestamp
+  const frameDuration = Math.round(1_000_000 / fps)
+
+  for (let i = 0; i < frames.length; i++) {
+    const frame = frames[i]
     const dw = frame.displayWidth
     const dh = frame.displayHeight
 
@@ -272,9 +276,11 @@ async function encodeFrames(
     ctx.drawImage(overlayBitmap, 0, 0)
     frame.close()
 
-    const outTs = ts + timestampOffset
-    const outDur = Math.round(1_000_000 / fps)
-    const vf = new VideoFrame(offscreen, { timestamp: outTs, duration: outDur })
+    // Index-based timestamps — guaranteed monotonically increasing regardless of
+    // source CTS order (B-frames would otherwise cause muxer to throw and silently
+    // drop the decoderConfig, leaving it null and crashing finalize()).
+    const outTs = timestampOffset + i * frameDuration
+    const vf = new VideoFrame(offscreen, { timestamp: outTs, duration: frameDuration })
     const keyFrame = frameCounter.n % (fps * 2) === 0  // keyframe every 2s
     encoder.encode(vf, { keyFrame })
     vf.close()

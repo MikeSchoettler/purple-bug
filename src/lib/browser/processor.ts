@@ -106,14 +106,12 @@ export function detectFormat(width: number, height: number): VideoFormat | null 
   if (width === 1920 && height === 1080) return 'WIDE'
   if (width === 1080 && height === 1920) return 'V'
   if (width === 1080 && height === 1080) return 'SQ'
-  if (width === 1080 && height === 1350) return 'FEED'
 
-  // Aspect-ratio fallback
+  // Aspect-ratio fallback (FEED 4:5 intentionally excluded — derived from SQ source)
   if (width > 0 && height > 0) {
     const ratio = width / height
     if (Math.abs(ratio - 16 / 9) < 0.05 && width > height) return 'WIDE'
     if (Math.abs(ratio - 9 / 16) < 0.05 && height > width) return 'V'
-    if (Math.abs(ratio - 4 / 5)  < 0.05 && height > width) return 'FEED'
     if (Math.abs(ratio - 1)       < 0.05)                   return 'SQ'
   }
 

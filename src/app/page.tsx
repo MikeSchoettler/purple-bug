@@ -204,7 +204,7 @@ export default function Home() {
   const busy = stage === 'loadingWasm' || stage === 'scanning' || stage === 'processing'
 
   return (
-    <main className="min-h-screen bg-zinc-950 text-zinc-100">
+    <main className="min-h-screen bg-zinc-50 text-zinc-900">
       <div className="max-w-xl mx-auto px-6 py-12">
 
         {/* Header */}
@@ -226,7 +226,7 @@ export default function Home() {
                 <Label>Campaign</Label>
                 <select
                   name="campaign"
-                  className="w-full text-sm bg-zinc-900 border border-zinc-800 hover:border-zinc-600 focus:border-purple-500 focus:outline-none rounded-lg px-3 py-2 text-zinc-200 transition-colors"
+                  className="w-full text-sm bg-white border border-zinc-300 hover:border-zinc-400 focus:border-purple-500 focus:outline-none rounded-lg px-3 py-2 text-zinc-800 transition-colors"
                 >
                   <option value="YangoPlay">Yango Play</option>
                   <option value="YangoPlay_noon">Yango Play + noon</option>
@@ -262,7 +262,7 @@ export default function Home() {
                 name="diskUrl"
                 type="url"
                 placeholder="https://disk.yandex.com/d/…"
-                className="w-full text-sm bg-zinc-900 border border-zinc-800 hover:border-zinc-600 focus:border-purple-500 focus:outline-none rounded-lg px-3 py-2 text-zinc-200 placeholder:text-zinc-700 transition-colors"
+                className="w-full text-sm bg-white border border-zinc-300 hover:border-zinc-400 focus:border-purple-500 focus:outline-none rounded-lg px-3 py-2 text-zinc-800 placeholder:text-zinc-400 transition-colors"
               />
             </div>
             <div className="mt-3">
@@ -282,11 +282,11 @@ export default function Home() {
               name="taskText"
               rows={7}
               placeholder={'# Version 1\n## Main text\nText here\nنص هنا\n## CTA\nWatch now\nشاهد الآن'}
-              className="w-full text-sm bg-zinc-900 border border-zinc-800 hover:border-zinc-600 focus:border-purple-500 focus:outline-none rounded-lg px-3 py-2.5 text-zinc-200 placeholder:text-zinc-700 font-mono resize-y transition-colors"
+              className="w-full text-sm bg-white border border-zinc-300 hover:border-zinc-400 focus:border-purple-500 focus:outline-none rounded-lg px-3 py-2.5 text-zinc-800 placeholder:text-zinc-400 font-mono resize-y transition-colors"
             />
             <button
               type="button"
-              className="mt-1 text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+              className="mt-1 text-xs text-zinc-400 hover:text-zinc-600 transition-colors"
               onClick={() => {
                 const input = document.createElement('input')
                 input.type = 'file'; input.accept = '.md,.txt'
@@ -306,7 +306,7 @@ export default function Home() {
           <button
             type="submit"
             disabled={busy}
-            className="w-full mt-2 py-3 px-6 bg-purple-600 hover:bg-purple-500 active:scale-[0.99] disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed rounded-xl font-medium text-sm transition-all"
+            className="w-full mt-2 py-3 px-6 bg-purple-600 hover:bg-purple-500 active:scale-[0.99] disabled:bg-zinc-200 disabled:text-zinc-400 disabled:cursor-not-allowed rounded-xl font-medium text-sm text-white transition-all"
           >
             {busy ? <BusyLabel stage={stage} pct={wasmPct} /> : 'Generate creatives →'}
           </button>
@@ -314,28 +314,28 @@ export default function Home() {
 
         {/* Progress */}
         {ops.length > 0 && (
-          <div className="mt-6 rounded-xl border border-zinc-800 overflow-hidden">
-            <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
+          <div className="mt-6 rounded-xl border border-zinc-200 overflow-hidden">
+            <div className="px-4 py-3 border-b border-zinc-200 flex items-center justify-between">
               <span className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Progress</span>
               <button
                 onClick={() => setShowLog(s => !s)}
-                className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+                className="text-xs text-zinc-400 hover:text-zinc-600 transition-colors"
               >
                 {showLog ? 'Hide log' : 'Show log'}
               </button>
             </div>
-            <div className="divide-y divide-zinc-900">
+            <div className="divide-y divide-zinc-100">
               {ops.map(op => (
                 <div key={op.id} className="flex items-center gap-3 px-4 py-2.5">
                   <OpIcon status={op.status} pct={op.status === 'running' && op.id === 'wasm' ? wasmPct : undefined} />
-                  <span className={`text-sm ${op.status === 'running' ? 'text-zinc-100' : op.status === 'done' ? 'text-zinc-400' : op.status === 'error' ? 'text-red-400' : 'text-zinc-600'}`}>
+                  <span className={`text-sm ${op.status === 'running' ? 'text-zinc-900' : op.status === 'done' ? 'text-zinc-400' : op.status === 'error' ? 'text-red-500' : 'text-zinc-400'}`}>
                     {op.label}
                   </span>
                 </div>
               ))}
             </div>
             {showLog && log.length > 0 && (
-              <div className="border-t border-zinc-800 bg-zinc-950 px-4 py-3 font-mono text-xs text-zinc-500 space-y-0.5 max-h-48 overflow-y-auto">
+              <div className="border-t border-zinc-200 bg-zinc-50 px-4 py-3 font-mono text-xs text-zinc-500 space-y-0.5 max-h-48 overflow-y-auto">
                 {log.map((l, i) => <div key={i}>{l}</div>)}
               </div>
             )}
@@ -344,22 +344,22 @@ export default function Home() {
 
         {/* Error */}
         {stage === 'error' && errorMsg && (
-          <div className="mt-4 rounded-xl border border-red-900 bg-red-950/50 px-4 py-3 text-sm text-red-400">
+          <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">
             {errorMsg}
           </div>
         )}
 
         {/* Done */}
         {stage === 'done' && downloadUrl && (
-          <div className="mt-4 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-4 flex items-center justify-between">
+          <div className="mt-4 rounded-xl border border-zinc-200 bg-white px-4 py-4 flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-zinc-100">Ready to download</p>
+              <p className="text-sm font-medium text-zinc-900">Ready to download</p>
               <p className="text-xs text-zinc-500 mt-0.5">{zipName}</p>
             </div>
             <a
               href={downloadUrl}
               download={zipName}
-              className="py-2 px-5 bg-purple-600 hover:bg-purple-500 active:scale-[0.99] rounded-lg text-sm font-medium transition-all"
+              className="py-2 px-5 bg-purple-600 hover:bg-purple-500 active:scale-[0.99] rounded-lg text-sm font-medium text-white transition-all"
             >
               Download ZIP
             </a>
@@ -374,12 +374,12 @@ export default function Home() {
 
 function Section({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 overflow-hidden">
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-zinc-800/60">
-        <span className="flex items-center justify-center w-5 h-5 rounded-full bg-zinc-800 text-zinc-400 text-xs font-medium tabular-nums">
+    <div className="rounded-xl border border-zinc-200 bg-white overflow-hidden">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-zinc-100">
+        <span className="flex items-center justify-center w-5 h-5 rounded-full bg-zinc-100 text-zinc-500 text-xs font-medium tabular-nums">
           {n}
         </span>
-        <span className="text-sm font-medium text-zinc-300">{title}</span>
+        <span className="text-sm font-medium text-zinc-700">{title}</span>
       </div>
       <div className="px-4 py-4">{children}</div>
     </div>
@@ -389,8 +389,8 @@ function Section({ n, title, children }: { n: number; title: string; children: R
 function Label({ children, hint }: { children: React.ReactNode; hint?: string }) {
   return (
     <div className="flex items-baseline gap-2 mb-1.5">
-      <span className="text-xs font-medium text-zinc-400">{children}</span>
-      {hint && <span className="text-xs text-zinc-600">{hint}</span>}
+      <span className="text-xs font-medium text-zinc-600">{children}</span>
+      {hint && <span className="text-xs text-zinc-400">{hint}</span>}
     </div>
   )
 }
@@ -399,7 +399,7 @@ function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
-      className="w-full text-sm bg-zinc-950 border border-zinc-800 hover:border-zinc-600 focus:border-purple-500 focus:outline-none rounded-lg px-3 py-2 text-zinc-200 placeholder:text-zinc-700 transition-colors"
+      className="w-full text-sm bg-white border border-zinc-300 hover:border-zinc-400 focus:border-purple-500 focus:outline-none rounded-lg px-3 py-2 text-zinc-800 placeholder:text-zinc-400 transition-colors"
     />
   )
 }
@@ -416,18 +416,18 @@ interface FileZoneProps {
 
 function FileZone({ name, label, accept, hint, multiple, fileName, onChange }: FileZoneProps) {
   return (
-    <label className="group relative flex flex-col items-center justify-center gap-1 w-full h-20 border border-dashed border-zinc-800 hover:border-zinc-600 rounded-xl cursor-pointer transition-colors">
+    <label className="group relative flex flex-col items-center justify-center gap-1 w-full h-20 border border-dashed border-zinc-300 hover:border-zinc-400 rounded-xl cursor-pointer transition-colors">
       <input
         type="file" name={name} accept={accept} multiple={multiple} className="sr-only"
         onChange={e => onChange(e.target.files?.[0] ?? null, e.target.files ?? undefined)}
       />
       {fileName ? (
-        <span className="text-xs text-purple-400 px-2 text-center leading-tight">{fileName}</span>
+        <span className="text-xs text-purple-600 px-2 text-center leading-tight">{fileName}</span>
       ) : (
         <>
           <UploadIcon />
-          <span className="text-xs text-zinc-600 group-hover:text-zinc-400 transition-colors">{label}</span>
-          {hint && <span className="text-[10px] text-zinc-700">{hint}</span>}
+          <span className="text-xs text-zinc-400 group-hover:text-zinc-600 transition-colors">{label}</span>
+          {hint && <span className="text-[10px] text-zinc-400">{hint}</span>}
         </>
       )}
     </label>
@@ -435,13 +435,13 @@ function FileZone({ name, label, accept, hint, multiple, fileName, onChange }: F
 }
 
 function OpIcon({ status, pct }: { status: Op['status']; pct?: number }) {
-  if (status === 'done')    return <span className="text-zinc-500 w-4 text-center text-xs">✓</span>
+  if (status === 'done')    return <span className="text-zinc-400 w-4 text-center text-xs">✓</span>
   if (status === 'error')   return <span className="text-red-500 w-4 text-center text-xs">✗</span>
-  if (status === 'waiting') return <span className="w-4 h-4 rounded-full border border-zinc-800 flex-shrink-0" />
+  if (status === 'waiting') return <span className="w-4 h-4 rounded-full border border-zinc-200 flex-shrink-0" />
   // running
   return (
     <span className="relative flex-shrink-0 w-4 h-4">
-      <span className="absolute inset-0 rounded-full border-2 border-zinc-800" />
+      <span className="absolute inset-0 rounded-full border-2 border-zinc-200" />
       <span
         className="absolute inset-0 rounded-full border-2 border-t-purple-500 animate-spin"
         style={pct != null && pct < 100 ? {
@@ -462,7 +462,7 @@ function BusyLabel({ stage, pct }: { stage: Stage; pct: number }) {
 
 function UploadIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="text-zinc-600 group-hover:text-zinc-400 transition-colors">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="text-zinc-400 group-hover:text-zinc-600 transition-colors">
       <path d="M8 10V3M8 3L5 6M8 3l3 3M2 12h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
     </svg>
   )

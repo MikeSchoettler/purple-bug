@@ -96,7 +96,7 @@ export const LAYOUT: Record<VideoFormat, FormatLayout> = {
     },
     logoshotCta: {
       watchNow: { x: 0, y: 350, w: 1920, h: 60  },
-      button:   { x: 0, y: 640, w: 1920, h: 130 },
+      button:   { x: 0, y: 670, w: 1920, h: 130 },
     },
   },
 }

@@ -19,7 +19,9 @@ function apiGet<T>(url: string): Promise<T> {
 function parseDiskUrl(url: string): { publicKey: string; folderPath: string } {
   const match = url.match(/^(https?:\/\/disk\.yandex\.(?:com|ru)\/d\/[^/?#\s]+)(\/[^?#]*)?/)
   if (!match) throw new Error(`Invalid Yandex Disk URL: ${url}`)
-  return { publicKey: match[1], folderPath: decodeURIComponent(match[2] ?? '/') }
+  // Normalize .ru → .com — Yandex public API requires canonical .com URLs
+  const publicKey = match[1].replace('disk.yandex.ru', 'disk.yandex.com')
+  return { publicKey, folderPath: decodeURIComponent(match[2] ?? '/') }
 }
 
 // GET /api/disk-proxy?diskUrl=... → { files: [{ name, downloadUrl }] }
