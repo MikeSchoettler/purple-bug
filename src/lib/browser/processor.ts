@@ -33,6 +33,10 @@ let ffmpegInstance: any = null
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let ffmpegLoading: Promise<any> | null = null
 
+// Tracks which asset keys are already written to the FFmpeg virtual FS so we
+// don't re-fetch and re-write the same plates / logoshots / audio every job.
+const ffAssetKeys = new Set<string>()
+
 export async function loadFFmpeg(onProgress?: (pct: number) => void) {
   if (ffmpegInstance) return ffmpegInstance
   if (ffmpegLoading) return ffmpegLoading
@@ -79,6 +83,7 @@ export async function loadFFmpeg(onProgress?: (pct: number) => void) {
     onProgress?.(100)
 
     ffmpegInstance = ff
+    ffAssetKeys.clear()
     return ff
   })()
 
@@ -113,27 +118,36 @@ async function fetchAsset(url: string): Promise<Uint8Array> {
   return new Uint8Array(await res.arrayBuffer())
 }
 
+// Write asset to FFmpeg FS only on first use; subsequent calls are no-ops.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function ensureFFAsset(ff: any, url: string, key: string): Promise<void> {
+  if (ffAssetKeys.has(key)) return
+  await ff.writeFile(key, await fetchAsset(url))
+  ffAssetKeys.add(key)
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function processOneJob(
   ff: any,
   taskConfig: BrowserTaskConfig,
   videoFile: BrowserVideoFile,
+  trailerKey: string,
   outputFormat: VideoFormat,
   lang: Language,
   version: TextVersion,
   onLog: (msg: string) => void
 ): Promise<Uint8Array> {
-  const layout    = LAYOUT[outputFormat]
+  const layout     = LAYOUT[outputFormat]
   const langLayout = layout[lang]
   const { x: logoX, y: logoY, w: logoW, h: logoH } = langLayout.titleLogo
   const { x: offerX, y: offerY, w: offerW, h: offerH } = langLayout.offerText
   const { x: watchX, y: watchY } = layout.logoshotCta.watchNow
-  const { x: ctaX, y: ctaY }    = layout.logoshotCta.button
+  const { x: ctaX, y: ctaY }     = layout.logoshotCta.button
   const frameW = layout.frame.w
 
-  const text    = lang === 'EN' ? version.mainTextEN : version.mainTextAR
-  const ctaText = lang === 'EN' ? version.ctaEN      : version.ctaAR
-  const logoFile = lang === 'EN' ? taskConfig.logoEN : taskConfig.logoAR
+  const text     = lang === 'EN' ? version.mainTextEN : version.mainTextAR
+  const ctaText  = lang === 'EN' ? version.ctaEN      : version.ctaAR
+  const logoFile = lang === 'EN' ? taskConfig.logoEN  : taskConfig.logoAR
 
   onLog('  Rendering PNGs...')
   const [logoPng, offerPng, watchNowPng, ctaPng] = await Promise.all([
@@ -148,24 +162,22 @@ async function processOneJob(
     ? LOGOSHOT_TIMING.shortVideoOffset
     : dur - LOGOSHOT_TIMING.longVideoPreroll
 
-  const plate  = await fetchAsset(plateName(outputFormat, taskConfig.campaign, lang))
-  const lsVid  = await fetchAsset(`/assets/logoshots/${LOGOSHOT_FILES[outputFormat]}`)
-  const lsAud  = await fetchAsset(`/assets/logoshots/${LOGOSHOT_AUDIO[lang]}`)
+  // Ensure shared assets are in FFmpeg FS (written only once per session)
+  const plateKey  = `asset_plate_${taskConfig.campaign}_${outputFormat}_${lang}.png`
+  const lsVidKey  = `asset_ls_${outputFormat}.mp4`
+  const lsAudKey  = `asset_lsaud_${lang}.mp3`
+  await ensureFFAsset(ff, plateName(outputFormat, taskConfig.campaign, lang), plateKey)
+  await ensureFFAsset(ff, `/assets/logoshots/${LOGOSHOT_FILES[outputFormat]}`, lsVidKey)
+  await ensureFFAsset(ff, `/assets/logoshots/${LOGOSHOT_AUDIO[lang]}`, lsAudKey)
 
-  // Write files to FFmpeg virtual FS
+  // Write job-specific PNGs (unique per lang/version)
   const prefix = `job_${outputFormat}_${lang}_v${version.id}`
-  // Copy the Uint8Array before passing to FFmpeg — the Worker transfer detaches the
-  // underlying ArrayBuffer, which would break subsequent calls for AR/FEED variants.
-  await ff.writeFile(`${prefix}_trailer.mp4`,   videoFile.data.slice())
-  await ff.writeFile(`${prefix}_plate.png`,      plate)
-  await ff.writeFile(`${prefix}_logo.png`,       logoPng)
-  await ff.writeFile(`${prefix}_offer.png`,      offerPng)
-  await ff.writeFile(`${prefix}_ls.mp4`,         lsVid)
-  await ff.writeFile(`${prefix}_lsaud.mp3`,      lsAud)
-  await ff.writeFile(`${prefix}_watchnow.png`,   watchNowPng)
-  await ff.writeFile(`${prefix}_cta.png`,        ctaPng)
+  await ff.writeFile(`${prefix}_logo.png`,     logoPng)
+  await ff.writeFile(`${prefix}_offer.png`,    offerPng)
+  await ff.writeFile(`${prefix}_watchnow.png`, watchNowPng)
+  await ff.writeFile(`${prefix}_cta.png`,      ctaPng)
 
-  // Build filter_complex
+  // Input indices
   const iTrailer = 0
   const iPlate   = 1
   const iLogo    = 2
@@ -175,7 +187,6 @@ async function processOneJob(
   const iWatch   = 6
   const iCta     = 7
 
-  // For FEED: pad SQ video to 1080x1350
   const padFilter = outputFormat === 'FEED'
     ? `[${iTrailer}:v]pad=1080:1350:0:0[base];[base]`
     : `[${iTrailer}:v]`
@@ -187,10 +198,6 @@ async function processOneJob(
     `[${iOffer}:v]overlay=${offerX}:${offerY}[vo];` +
     `[${iLsVid}:v]setpts=PTS-STARTPTS+${t}/TB[ls];` +
     `[vo][ls]overlay=0:0:shortest=1[vlsbase];` +
-    // enable='gte(t,X)' shows the PNG from time t onward; eof_action=repeat (default)
-    // holds the single PNG frame for the remaining duration. No looping needed — the
-    // overlay's base (vlsbase) controls total output length via the default "end when
-    // first/base stream ends" behaviour.
     `[vlsbase][${iWatch}:v]overlay=${watchX}:${watchY}:enable='gte(t,${t})'[vw];` +
     `[vw][${iCta}:v]overlay=${ctaX}:${ctaY}:enable='gte(t,${t})'[vfinal]`
 
@@ -203,12 +210,12 @@ async function processOneJob(
   onLog('  Running FFmpeg...')
 
   const code = await ff.exec([
-    '-i', `${prefix}_trailer.mp4`,
-    '-i', `${prefix}_plate.png`,
+    '-i', trailerKey,
+    '-i', plateKey,
     '-i', `${prefix}_logo.png`,
     '-i', `${prefix}_offer.png`,
-    '-i', `${prefix}_ls.mp4`,
-    '-i', `${prefix}_lsaud.mp3`,
+    '-i', lsVidKey,
+    '-i', lsAudKey,
     '-i', `${prefix}_watchnow.png`,
     '-i', `${prefix}_cta.png`,
     '-filter_complex', `${vf};${af}`,
@@ -218,8 +225,7 @@ async function processOneJob(
     '-preset', 'ultrafast',
     '-crf', '23',
     '-c:a', 'aac',
-    '-b:a', '192k',
-    '-movflags', '+faststart',
+    '-b:a', '128k',
     '-pix_fmt', 'yuv420p',
     outFile,
   ])
@@ -228,11 +234,11 @@ async function processOneJob(
 
   const output = await ff.readFile(outFile) as Uint8Array
 
-  // Clean up FS
+  // Clean up job-specific files only; shared assets (plate, logoshot, audio) stay cached
   for (const f of [
-    `${prefix}_trailer.mp4`, `${prefix}_plate.png`, `${prefix}_logo.png`,
-    `${prefix}_offer.png`, `${prefix}_ls.mp4`, `${prefix}_lsaud.mp3`,
-    `${prefix}_watchnow.png`, `${prefix}_cta.png`, outFile,
+    `${prefix}_logo.png`, `${prefix}_offer.png`,
+    `${prefix}_watchnow.png`, `${prefix}_cta.png`,
+    outFile,
   ]) { try { await ff.deleteFile(f) } catch { /* ignore */ } }
 
   return output
@@ -253,21 +259,29 @@ export async function processVideoFile(
   const formatsToProcess: VideoFormat[] = videoFile.format === 'SQ' ? ['SQ', 'FEED'] : [videoFile.format]
   const outputs: Record<string, Uint8Array> = {}
 
-  for (const version of textVersions) {
-    for (const outputFormat of formatsToProcess) {
-      for (const lang of langs) {
-        const label = `${taskConfig.campaign}/${lang}/${outputFormat}/v${version.id}`
-        onLog(`Processing: ${label}`)
-        try {
-          const data = await processOneJob(ff, taskConfig, videoFile, outputFormat, lang, version, onLog)
-          const filename = `${taskConfig.titleName}_${taskConfig.campaign}_${outputFormat}_${lang}_v${version.id}.mp4`
-          outputs[filename] = data
-          onLog(`  ✓ ${filename}`)
-        } catch (err) {
-          onLog(`  ✗ Failed: ${err instanceof Error ? err.message : String(err)}`)
+  // Write the trailer once and reuse it for all variants of this video
+  const trailerKey = `trailer_${videoFile.name.replace(/[^a-z0-9]/gi, '_').slice(0, 40)}.mp4`
+  await ff.writeFile(trailerKey, videoFile.data.slice())
+
+  try {
+    for (const version of textVersions) {
+      for (const outputFormat of formatsToProcess) {
+        for (const lang of langs) {
+          const label = `${taskConfig.campaign}/${lang}/${outputFormat}/v${version.id}`
+          onLog(`Processing: ${label}`)
+          try {
+            const data = await processOneJob(ff, taskConfig, videoFile, trailerKey, outputFormat, lang, version, onLog)
+            const filename = `${taskConfig.titleName}_${taskConfig.campaign}_${outputFormat}_${lang}_v${version.id}.mp4`
+            outputs[filename] = data
+            onLog(`  ✓ ${filename}`)
+          } catch (err) {
+            onLog(`  ✗ Failed: ${err instanceof Error ? err.message : String(err)}`)
+          }
         }
       }
     }
+  } finally {
+    try { await ff.deleteFile(trailerKey) } catch { /* ignore */ }
   }
 
   return outputs
