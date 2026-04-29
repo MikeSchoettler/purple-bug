@@ -147,7 +147,6 @@ async function processOneJob(
   const t = dur <= LOGOSHOT_TIMING.shortVideoThreshold
     ? LOGOSHOT_TIMING.shortVideoOffset
     : dur - LOGOSHOT_TIMING.longVideoPreroll
-  const fadeD = LOGOSHOT_TIMING.fadeInDuration
 
   const plate  = await fetchAsset(plateName(outputFormat, taskConfig.campaign, lang))
   const lsVid  = await fetchAsset(`/assets/logoshots/${LOGOSHOT_FILES[outputFormat]}`)
@@ -188,13 +187,12 @@ async function processOneJob(
     `[${iOffer}:v]overlay=${offerX}:${offerY}[vo];` +
     `[${iLsVid}:v]setpts=PTS-STARTPTS+${t}/TB[ls];` +
     `[vo][ls]overlay=0:0:shortest=1[vlsbase];` +
-    // watchnow and cta use -loop 1 inputs (infinite streams) so no shortest needed —
-    // output duration is governed by vlsbase (the trailer) via overlay's default
-    // "end when first/base stream ends" behaviour.
-    `[${iWatch}:v]fade=t=in:st=${t}:d=${fadeD}:alpha=1[fw];` +
-    `[vlsbase][fw]overlay=${watchX}:${watchY}[vw];` +
-    `[${iCta}:v]fade=t=in:st=${t}:d=${fadeD}:alpha=1[fc];` +
-    `[vw][fc]overlay=${ctaX}:${ctaY}[vfinal]`
+    // enable='gte(t,X)' shows the PNG from time t onward; eof_action=repeat (default)
+    // holds the single PNG frame for the remaining duration. No looping needed — the
+    // overlay's base (vlsbase) controls total output length via the default "end when
+    // first/base stream ends" behaviour.
+    `[vlsbase][${iWatch}:v]overlay=${watchX}:${watchY}:enable='gte(t,${t})'[vw];` +
+    `[vw][${iCta}:v]overlay=${ctaX}:${ctaY}:enable='gte(t,${t})'[vfinal]`
 
   const af =
     `[${iTrailer}:a]atrim=0:${t},asetpts=PTS-STARTPTS[atrl];` +
@@ -211,10 +209,8 @@ async function processOneJob(
     '-i', `${prefix}_offer.png`,
     '-i', `${prefix}_ls.mp4`,
     '-i', `${prefix}_lsaud.mp3`,
-    // -loop 1 makes static PNGs infinite streams so fade+overlay durations are
-    // governed by the base video rather than a 1-frame PNG ending immediately.
-    '-loop', '1', '-i', `${prefix}_watchnow.png`,
-    '-loop', '1', '-i', `${prefix}_cta.png`,
+    '-i', `${prefix}_watchnow.png`,
+    '-i', `${prefix}_cta.png`,
     '-filter_complex', `${vf};${af}`,
     '-map', '[vfinal]',
     '-map', '[afinal]',
