@@ -133,5 +133,6 @@ export const FORMAT_KEYWORDS: Array<{ keywords: string[]; format: VideoFormat }>
 ]
 
 export function plateName(format: VideoFormat, campaign: CampaignType, lang: Language): string {
-  return `/assets/plates/${CAMPAIGN_NAMES[campaign]} ${lang} ${FORMAT_DIMS[format]}.png`
+  const filename = `${CAMPAIGN_NAMES[campaign]} ${lang} ${FORMAT_DIMS[format]}.png`
+  return `/assets/plates/${encodeURIComponent(filename)}`
 }
