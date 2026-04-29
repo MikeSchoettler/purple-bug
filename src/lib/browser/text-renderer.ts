@@ -8,7 +8,6 @@ const NBSP = ' '
 function insertCurrencyNBSP(text: string, lang: Language): string {
   if (lang === 'EN')
     return text.replace(/(\d) (EGP|AED|KWD|QAR)\b/g, `$1${NBSP}$2`)
-  // Arabic: number before or after currency name
   return text
     .replace(/(\d) (جنيه|درهم|دينار|ريال)/g, `$1${NBSP}$2`)
     .replace(/(جنيه|درهم|دينار|ريال) (\d)/g, `$1${NBSP}$2`)
@@ -21,18 +20,23 @@ function offerFontSize(text: string, isWide: boolean): number {
   return isWide ? 72 : 64
 }
 
+// How much to shift the offer text UP within its zone (canvas-relative, in px).
+const FORMAT_TEXT_Y_OFFSET: Partial<Record<VideoFormat, number>> = {
+  SQ: -10, FEED: -10, V: -20, WIDE: -10,
+}
+
 let fontsLoaded = false
 
 export async function ensureFonts(): Promise<void> {
   if (fontsLoaded) return
-  const load = (family: string, url: string) => {
-    const f = new FontFace(family, `url(${url})`)
+  const load = (family: string, url: string, weight: string) => {
+    const f = new FontFace(family, `url(${url})`, { weight })
     return f.load().then(f => { document.fonts.add(f) })
   }
   await Promise.all([
-    load('YangoHeadline',   '/assets/fonts/YangoGroupHeadline-ExtraBold.ttf'),
-    load('YangoHeadlineAR', '/assets/fonts/YangoGroupHeadline-ExtraBold-AR.otf'),
-    load('YangoText',       '/assets/fonts/YangoGroupText-Medium.ttf'),
+    load('YangoHeadline',   '/assets/fonts/YangoGroupHeadline-ExtraBold.ttf',    '800'),
+    load('YangoHeadlineAR', '/assets/fonts/YangoGroupHeadline-ExtraBold-AR.otf', '800'),
+    load('YangoText',       '/assets/fonts/YangoGroupText-Medium.ttf',           '500'),
   ])
   fontsLoaded = true
 }
@@ -48,28 +52,24 @@ export async function renderOfferText(
 
   const normalized = insertCurrencyNBSP(text, lang)
   const fontSize   = offerFontSize(normalized, isWide)
-  const lineH      = fontSize  // 100% line height
+  const lineH      = fontSize  // 100% leading
 
   const canvas = document.createElement('canvas')
   canvas.width  = maxW
   canvas.height = maxH
   const ctx = canvas.getContext('2d')!
 
-  ctx.font      = `${fontSize}px "${fontFamily}"`
-  ctx.direction = isAR ? 'rtl' : 'ltr'
-
-  // V format: center alignment; others: side-pinned to match logo position
-  const align: CanvasTextAlign = isV ? 'center' : (isAR ? 'right' : 'left')
-  ctx.textAlign    = align
+  ctx.font         = `800 ${fontSize}px "${fontFamily}"`
+  ctx.direction    = isAR ? 'rtl' : 'ltr'
+  ctx.textAlign    = isV ? 'center' : (isAR ? 'right' : 'left')
   ctx.textBaseline = 'alphabetic'
 
   const padding = isV ? 0 : 32
-  const wrapW   = maxW - padding * 2
-  const lines   = wrapText(ctx, normalized, wrapW)
+  const lines   = wrapText(ctx, normalized, maxW - padding * 2)
 
-  // Vertical center of the text block within the zone
   const blockH  = lines.length * lineH
-  const startY  = Math.max(lineH, (maxH - blockH) / 2 + lineH)
+  const yAdj    = FORMAT_TEXT_Y_OFFSET[format] ?? 0
+  const startY  = Math.max(lineH, (maxH - blockH) / 2 + lineH) + yAdj
 
   const grad = ctx.createLinearGradient(0, startY - lineH, 0, startY - lineH + blockH)
   for (const s of OFFER_TEXT_GRADIENT.stops) grad.addColorStop(s.offset, s.color)
@@ -91,7 +91,7 @@ export async function renderWatchNowText(lang: Language, frameW: number): Promis
   canvas.width  = frameW
   canvas.height = h
   const ctx = canvas.getContext('2d')!
-  ctx.font          = `${fontSize}px "YangoText"`
+  ctx.font          = `500 ${fontSize}px "YangoText"`
   ctx.fillStyle     = WATCH_NOW_TEXT.color
   ctx.textAlign     = 'center'
   ctx.textBaseline  = 'alphabetic'
@@ -103,6 +103,13 @@ export async function renderWatchNowText(lang: Language, frameW: number): Promis
 
 export async function renderCtaButton(text: string, lang: Language, frameW: number): Promise<Uint8Array> {
   await ensureFonts()
+  // Return transparent placeholder when there is no CTA text
+  if (!text.trim()) {
+    const canvas = document.createElement('canvas')
+    canvas.width = 1; canvas.height = 1
+    return toPng(canvas)
+  }
+
   const { fontSize, paddingV, paddingH, borderRadius, color } = CTA_BUTTON
 
   const canvas = document.createElement('canvas')
@@ -110,7 +117,7 @@ export async function renderCtaButton(text: string, lang: Language, frameW: numb
   canvas.height = fontSize + paddingV * 2 + 20
 
   const ctx = canvas.getContext('2d')!
-  ctx.font = `${fontSize}px "YangoText"`
+  ctx.font = `500 ${fontSize}px "YangoText"`
 
   const textW = ctx.measureText(text).width
   const btnW  = Math.ceil(textW + paddingH * 2)
@@ -160,6 +167,54 @@ export async function fitLogo(
   ctx.drawImage(img, dx, dy, targetW, targetH)
 
   return toPng(canvas)
+}
+
+// Pre-composite plate + logo + offer text into a single full-frame PNG.
+// Reduces FFmpeg from 5 overlays to 2 (composite + logoshot overlay).
+export async function compositeMainOverlay(
+  frameW: number, frameH: number,
+  plate: Uint8Array,
+  logoPng: Uint8Array, logoX: number, logoY: number,
+  offerPng: Uint8Array, offerX: number, offerY: number,
+): Promise<Uint8Array> {
+  const [plateImg, logoImg, offerImg] = await Promise.all([
+    pngToImage(plate), pngToImage(logoPng), pngToImage(offerPng),
+  ])
+  const canvas = document.createElement('canvas')
+  canvas.width = frameW; canvas.height = frameH
+  const ctx = canvas.getContext('2d')!
+  ctx.drawImage(plateImg, 0, 0)
+  ctx.drawImage(logoImg, logoX, logoY)
+  ctx.drawImage(offerImg, offerX, offerY)
+  return toPng(canvas)
+}
+
+// Pre-composite watchnow + CTA button into a single full-frame PNG.
+export async function compositeLogoshotOverlay(
+  frameW: number, frameH: number,
+  watchNowPng: Uint8Array, watchX: number, watchY: number,
+  ctaPng: Uint8Array, ctaX: number, ctaY: number,
+): Promise<Uint8Array> {
+  const [watchImg, ctaImg] = await Promise.all([
+    pngToImage(watchNowPng), pngToImage(ctaPng),
+  ])
+  const canvas = document.createElement('canvas')
+  canvas.width = frameW; canvas.height = frameH
+  const ctx = canvas.getContext('2d')!
+  ctx.drawImage(watchImg, watchX, watchY)
+  ctx.drawImage(ctaImg, ctaX, ctaY)
+  return toPng(canvas)
+}
+
+function pngToImage(data: Uint8Array): Promise<HTMLImageElement> {
+  const blob = new Blob([data], { type: 'image/png' })
+  const url  = URL.createObjectURL(blob)
+  const img  = new Image()
+  img.src    = url
+  return new Promise((resolve, reject) => {
+    img.onload  = () => { URL.revokeObjectURL(url); resolve(img) }
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('PNG load failed')) }
+  })
 }
 
 function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {

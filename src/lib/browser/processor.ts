@@ -8,6 +8,7 @@ import {
 } from '../constants-browser'
 import {
   ensureFonts, renderOfferText, renderWatchNowText, renderCtaButton, fitLogo,
+  compositeMainOverlay, compositeLogoshotOverlay,
 } from './text-renderer'
 
 export interface BrowserTaskConfig {
@@ -36,6 +37,16 @@ let ffmpegLoading: Promise<any> | null = null
 // Tracks which asset keys are already written to the FFmpeg virtual FS so we
 // don't re-fetch and re-write the same plates / logoshots / audio every job.
 const ffAssetKeys = new Set<string>()
+
+// Caches raw asset bytes (plates, etc.) so we don't re-fetch across jobs.
+const assetBytesCache = new Map<string, Uint8Array>()
+
+async function getAssetBytes(url: string): Promise<Uint8Array> {
+  if (assetBytesCache.has(url)) return assetBytesCache.get(url)!
+  const bytes = await fetchAsset(url)
+  assetBytesCache.set(url, bytes)
+  return bytes
+}
 
 export async function loadFFmpeg(onProgress?: (pct: number) => void) {
   if (ffmpegInstance) return ffmpegInstance
@@ -143,18 +154,29 @@ async function processOneJob(
   const { x: offerX, y: offerY, w: offerW, h: offerH } = langLayout.offerText
   const { x: watchX, y: watchY } = layout.logoshotCta.watchNow
   const { x: ctaX, y: ctaY }     = layout.logoshotCta.button
-  const frameW = layout.frame.w
+  const { w: frameW, h: frameH } = layout.frame
 
   const text     = lang === 'EN' ? version.mainTextEN : version.mainTextAR
   const ctaText  = lang === 'EN' ? version.ctaEN      : version.ctaAR
   const logoFile = lang === 'EN' ? taskConfig.logoEN  : taskConfig.logoAR
 
   onLog('  Rendering PNGs...')
+
+  // Fetch plate bytes from cache (avoid re-fetch across jobs)
+  const platePng = await getAssetBytes(plateName(outputFormat, taskConfig.campaign, lang))
+
   const [logoPng, offerPng, watchNowPng, ctaPng] = await Promise.all([
     fitLogo(logoFile, logoW, logoH),
     renderOfferText(text, lang, offerW, offerH, outputFormat),
     renderWatchNowText(lang, frameW),
     renderCtaButton(ctaText, lang, frameW),
+  ])
+
+  // Pre-composite browser-side: plate+logo+offer → one PNG; watchnow+cta → one PNG.
+  // Reduces FFmpeg overlays from 5 to 2.
+  const [mainOverlayPng, lsOverlayPng] = await Promise.all([
+    compositeMainOverlay(frameW, frameH, platePng, logoPng, logoX, logoY, offerPng, offerX, offerY),
+    compositeLogoshotOverlay(frameW, frameH, watchNowPng, watchX, watchY, ctaPng, ctaX, ctaY),
   ])
 
   const dur = videoFile.duration
@@ -163,47 +185,31 @@ async function processOneJob(
     : dur - LOGOSHOT_TIMING.longVideoPreroll
 
   // Ensure shared assets are in FFmpeg FS (written only once per session)
-  const plateKey  = `asset_plate_${taskConfig.campaign}_${outputFormat}_${lang}.png`
-  const lsVidKey  = `asset_ls_${outputFormat}.mp4`
-  const lsAudKey  = `asset_lsaud_${lang}.mp3`
-  await ensureFFAsset(ff, plateName(outputFormat, taskConfig.campaign, lang), plateKey)
+  const lsVidKey = `asset_ls_${outputFormat}.mp4`
+  const lsAudKey = `asset_lsaud_${lang}.mp3`
   await ensureFFAsset(ff, `/assets/logoshots/${LOGOSHOT_FILES[outputFormat]}`, lsVidKey)
   await ensureFFAsset(ff, `/assets/logoshots/${LOGOSHOT_AUDIO[lang]}`, lsAudKey)
 
-  // Write job-specific PNGs (unique per lang/version)
+  // Write job-specific composites (unique per lang/version)
   const prefix = `job_${outputFormat}_${lang}_v${version.id}`
-  await ff.writeFile(`${prefix}_logo.png`,     logoPng)
-  await ff.writeFile(`${prefix}_offer.png`,    offerPng)
-  await ff.writeFile(`${prefix}_watchnow.png`, watchNowPng)
-  await ff.writeFile(`${prefix}_cta.png`,      ctaPng)
+  await ff.writeFile(`${prefix}_main.png`,      mainOverlayPng)
+  await ff.writeFile(`${prefix}_lsoverlay.png`, lsOverlayPng)
 
-  // Input indices
-  const iTrailer = 0
-  const iPlate   = 1
-  const iLogo    = 2
-  const iOffer   = 3
-  const iLsVid   = 4
-  const iLsAud   = 5
-  const iWatch   = 6
-  const iCta     = 7
-
+  // Input indices: trailer=0, mainOverlay=1, lsVid=2, lsAud=3, lsOverlay=4
   const padFilter = outputFormat === 'FEED'
-    ? `[${iTrailer}:v]pad=1080:1350:0:0[base];[base]`
-    : `[${iTrailer}:v]`
+    ? `[0:v]pad=1080:1350:0:0[padded];[padded]`
+    : `[0:v]`
 
   const vf =
     padFilter +
-    `[${iPlate}:v]overlay=0:0[vp];[vp]` +
-    `[${iLogo}:v]overlay=${logoX}:${logoY}[vl];[vl]` +
-    `[${iOffer}:v]overlay=${offerX}:${offerY}[vo];` +
-    `[${iLsVid}:v]setpts=PTS-STARTPTS+${t}/TB[ls];` +
-    `[vo][ls]overlay=0:0:shortest=1[vlsbase];` +
-    `[vlsbase][${iWatch}:v]overlay=${watchX}:${watchY}:enable='gte(t,${t})'[vw];` +
-    `[vw][${iCta}:v]overlay=${ctaX}:${ctaY}:enable='gte(t,${t})'[vfinal]`
+    `[1:v]overlay=0:0[vm];` +
+    `[2:v]setpts=PTS-STARTPTS+${t}/TB[ls];` +
+    `[vm][ls]overlay=0:0:shortest=1[vlsbase];` +
+    `[vlsbase][4:v]overlay=0:0:enable='gte(t,${t})'[vfinal]`
 
   const af =
-    `[${iTrailer}:a]atrim=0:${t},asetpts=PTS-STARTPTS[atrl];` +
-    `[${iLsAud}:a]atrim=0:${dur - t},asetpts=PTS-STARTPTS[als];` +
+    `[0:a]atrim=0:${t},asetpts=PTS-STARTPTS[atrl];` +
+    `[3:a]atrim=0:${dur - t},asetpts=PTS-STARTPTS[als];` +
     `[atrl][als]concat=n=2:v=0:a=1[afinal]`
 
   const outFile = `${prefix}_out.mp4`
@@ -211,18 +217,16 @@ async function processOneJob(
 
   const code = await ff.exec([
     '-i', trailerKey,
-    '-i', plateKey,
-    '-i', `${prefix}_logo.png`,
-    '-i', `${prefix}_offer.png`,
+    '-i', `${prefix}_main.png`,
     '-i', lsVidKey,
     '-i', lsAudKey,
-    '-i', `${prefix}_watchnow.png`,
-    '-i', `${prefix}_cta.png`,
+    '-i', `${prefix}_lsoverlay.png`,
     '-filter_complex', `${vf};${af}`,
     '-map', '[vfinal]',
     '-map', '[afinal]',
     '-c:v', 'libx264',
     '-preset', 'ultrafast',
+    '-tune', 'zerolatency',
     '-crf', '23',
     '-c:a', 'aac',
     '-b:a', '128k',
@@ -234,12 +238,9 @@ async function processOneJob(
 
   const output = await ff.readFile(outFile) as Uint8Array
 
-  // Clean up job-specific files only; shared assets (plate, logoshot, audio) stay cached
-  for (const f of [
-    `${prefix}_logo.png`, `${prefix}_offer.png`,
-    `${prefix}_watchnow.png`, `${prefix}_cta.png`,
-    outFile,
-  ]) { try { await ff.deleteFile(f) } catch { /* ignore */ } }
+  for (const f of [`${prefix}_main.png`, `${prefix}_lsoverlay.png`, outFile]) {
+    try { await ff.deleteFile(f) } catch { /* ignore */ }
+  }
 
   return output
 }
@@ -271,9 +272,11 @@ export async function processVideoFile(
           onLog(`Processing: ${label}`)
           try {
             const data = await processOneJob(ff, taskConfig, videoFile, trailerKey, outputFormat, lang, version, onLog)
-            const filename = `${taskConfig.titleName}_${taskConfig.campaign}_${outputFormat}_${lang}_v${version.id}.mp4`
-            outputs[filename] = data
-            onLog(`  ✓ ${filename}`)
+            const outVer   = Math.max(videoFile.version, version.id)
+            const baseName = `${taskConfig.titleName}_${taskConfig.campaign}_${outputFormat}_${lang}_v${outVer}.mp4`
+            const filePath = `${taskConfig.titleName}/${taskConfig.campaign}/v${outVer}/${lang}/${baseName}`
+            outputs[filePath] = data
+            onLog(`  ✓ ${baseName}`)
           } catch (err) {
             onLog(`  ✗ Failed: ${err instanceof Error ? err.message : String(err)}`)
           }

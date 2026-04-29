@@ -91,9 +91,11 @@ function parseVersion(lines: string[], startIdx: number, id: number): TextVersio
       break
     }
 
-    // Section headers: accept 1–3 hashes, flexible spacing
-    if (line.match(/^#{1,3}\s*main[\s_]*text/i)) { inSection = 'main'; hasSections = true; continue }
-    if (line.match(/^#{1,3}\s*cta/i))             { inSection = 'cta';  hasSections = true; continue }
+    // Section headers: with or without leading #, bare "CTA Button" / "Main text" OK
+    if (line.match(/^#{1,3}\s*main[\s_]*text/i) || /^main[\s_]*text\s*$/i.test(line))
+      { inSection = 'main'; hasSections = true; continue }
+    if (line.match(/^#{1,3}\s*cta/i) || /^cta(\s+button)?\s*$/i.test(line))
+      { inSection = 'cta';  hasSections = true; continue }
 
     if (!line || line.startsWith('#')) continue
 
