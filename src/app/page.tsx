@@ -74,7 +74,7 @@ export default function Home() {
         campaign: campaignVal as 'YangoPlay' | 'YangoPlay_noon' | 'YangoPlay_talabat',
       })
       if (taskConfig.versions.length === 0)
-        return fail('Task text must contain at least one ## Main text section with text')
+        return fail('Could not find any text in the task. Paste English and Arabic lines, or use ## Main text / ## CTA headers.')
       const browserConfig: BrowserTaskConfig = {
         titleName: taskConfig.titleName,
         campaign:  taskConfig.campaign,

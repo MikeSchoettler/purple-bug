@@ -74,37 +74,54 @@ export function parseTaskFile(content: string, opts: {
 }
 
 function parseVersion(lines: string[], startIdx: number, id: number): TextVersion & { _linesConsumed: number } {
-  let mainTextEN = ''
-  let mainTextAR = ''
-  let ctaEN = ''
-  let ctaAR = ''
+  let mainTextEN = '', mainTextAR = '', ctaEN = '', ctaAR = ''
   let inSection: 'main' | 'cta' | null = null
+  let hasSections = false
   let linesConsumed = 0
+  const enLines: string[] = []
+  const arLines: string[] = []
 
   for (let i = startIdx; i < lines.length; i++) {
     const line = lines[i]
     linesConsumed++
 
-    // Stop at next version header or end-of-file
+    // Stop at next version header
     if (i > startIdx && line.match(/^#\s*version\s*\d+/i)) {
       linesConsumed--
       break
     }
 
-    if (line.match(/^##\s*main\s*text/i)) { inSection = 'main'; continue }
-    if (line.match(/^##\s*cta/i))         { inSection = 'cta';  continue }
+    // Section headers: accept 1–3 hashes, flexible spacing
+    if (line.match(/^#{1,3}\s*main[\s_]*text/i)) { inSection = 'main'; hasSections = true; continue }
+    if (line.match(/^#{1,3}\s*cta/i))             { inSection = 'cta';  hasSections = true; continue }
 
     if (!line || line.startsWith('#')) continue
 
     const isArabic = /[؀-ۿ]/.test(line)
 
-    if (inSection === 'main') {
-      if (isArabic) mainTextAR = line
-      else          mainTextEN = line
-    } else if (inSection === 'cta') {
-      if (isArabic) ctaAR = line
-      else          ctaEN = line
+    if (hasSections) {
+      // Section-based: assign to the active section (first occurrence wins)
+      if (inSection === 'main') {
+        if (isArabic) { if (!mainTextAR) mainTextAR = line }
+        else          { if (!mainTextEN) mainTextEN = line }
+      } else if (inSection === 'cta') {
+        if (isArabic) { if (!ctaAR) ctaAR = line }
+        else          { if (!ctaEN) ctaEN = line }
+      }
+    } else {
+      // No headers yet — collect lines for fallback assignment below
+      if (isArabic) arLines.push(line)
+      else          enLines.push(line)
     }
+  }
+
+  // Fallback: no section headers found — assign by position
+  // first EN/AR pair → main text, second pair → CTA
+  if (!hasSections) {
+    mainTextEN = enLines[0] ?? ''
+    mainTextAR = arLines[0] ?? ''
+    ctaEN      = enLines[1] ?? ''
+    ctaAR      = arLines[1] ?? ''
   }
 
   return { id, mainTextEN, mainTextAR, ctaEN, ctaAR, _linesConsumed: linesConsumed }
