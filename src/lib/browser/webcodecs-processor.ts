@@ -80,7 +80,7 @@ function demuxMp4(data: Uint8Array): Promise<DemuxResult> {
     mp4.onError = (e: unknown) => reject(new Error(String(e)))
 
     // mp4box.js requires an ArrayBuffer with a fileStart property
-    const ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+    const ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
     ;(ab as any).fileStart = 0
     mp4.appendBuffer(ab as any)
     mp4.flush()
@@ -140,12 +140,12 @@ async function buildAudioBuffer(
 
   // Decode both tracks to PCM
   const [trailerPcm, lsPcm] = await Promise.all([
-    new AudioContext().decodeAudioData(trailerData.buffer.slice(
-      trailerData.byteOffset, trailerData.byteOffset + trailerData.byteLength
-    )),
-    new AudioContext().decodeAudioData(logoshotAudioData.buffer.slice(
-      logoshotAudioData.byteOffset, logoshotAudioData.byteOffset + logoshotAudioData.byteLength
-    )),
+    new AudioContext().decodeAudioData(
+      trailerData.buffer.slice(trailerData.byteOffset, trailerData.byteOffset + trailerData.byteLength) as ArrayBuffer
+    ),
+    new AudioContext().decodeAudioData(
+      logoshotAudioData.buffer.slice(logoshotAudioData.byteOffset, logoshotAudioData.byteOffset + logoshotAudioData.byteLength) as ArrayBuffer
+    ),
   ])
 
   const offline = new OfflineAudioContext(channels, totalFrames, sampleRate)
