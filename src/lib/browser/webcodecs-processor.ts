@@ -165,6 +165,25 @@ async function buildAudioBuffer(
   return offline.startRendering()
 }
 
+// Trailer-only audio path used when withLogoshot === false
+async function buildAudioBufferFull(
+  trailerData: Uint8Array,
+  dur: number,
+): Promise<AudioBuffer> {
+  const sampleRate = 44100
+  const channels = 2
+  const totalFrames = Math.ceil(dur * sampleRate)
+  const trailerPcm = await new AudioContext().decodeAudioData(
+    trailerData.buffer.slice(trailerData.byteOffset, trailerData.byteOffset + trailerData.byteLength) as ArrayBuffer
+  )
+  const offline = new OfflineAudioContext(channels, totalFrames, sampleRate)
+  const src = offline.createBufferSource()
+  src.buffer = trailerPcm
+  src.connect(offline.destination)
+  src.start(0)
+  return offline.startRendering()
+}
+
 async function encodeAudio(
   pcm: AudioBuffer,
   onChunk: (chunk: EncodedAudioChunk, meta: EncodedAudioChunkMetadata | undefined) => void,
@@ -297,49 +316,30 @@ async function processOneJobWebCodecs(
   lang: Language,
   version: TextVersion,
   trailerDemux: DemuxResult,
-  logoshotDemux: DemuxResult,
-  logoshotAudioData: Uint8Array,
+  logoshotDemux: DemuxResult | null,
+  logoshotAudioData: Uint8Array | null,
   onLog: (msg: string) => void,
 ): Promise<Uint8Array> {
   const layout     = LAYOUT[outputFormat]
   const langLayout = layout[lang]
   const { x: logoX, y: logoY, w: logoW, h: logoH } = langLayout.titleLogo
   const { x: offerX, y: offerY, w: offerW, h: offerH } = langLayout.offerText
-  const { x: watchX, y: watchY } = layout.logoshotCta.watchNow
-  const { x: ctaX, y: ctaY }     = layout.logoshotCta.button
   const { w: frameW, h: frameH } = layout.frame
 
   const text     = lang === 'EN' ? version.mainTextEN : version.mainTextAR
   const ctaText  = lang === 'EN' ? version.ctaEN      : version.ctaAR
   const logoFile = lang === 'EN' ? taskConfig.logoEN  : taskConfig.logoAR
 
-  // ── Render overlay PNGs ──
   onLog('  Rendering overlays...')
   const platePng = await fetchBytes(plateName(outputFormat, taskConfig.campaign, lang))
-  const [logoPng, offerPng, watchNowPng, ctaPng] = await Promise.all([
+  const [logoPng, offerPng] = await Promise.all([
     fitLogo(logoFile, logoW, logoH),
     renderOfferText(text, lang, offerW, offerH, outputFormat),
-    renderWatchNowText(lang, frameW),
-    renderCtaButton(ctaText, lang, frameW),
-  ])
-  const [mainOverlayPng, lsOverlayPng] = await Promise.all([
-    compositeMainOverlay(frameW, frameH, platePng, logoPng, logoX, logoY, offerPng, offerX, offerY),
-    compositeLogoshotOverlay(frameW, frameH, watchNowPng, watchX, watchY, ctaPng, ctaX, ctaY),
   ])
 
-  // Load as ImageBitmap for fast canvas blitting
-  const [mainBitmap, lsBitmap] = await Promise.all([
-    createImageBitmap(new Blob([mainOverlayPng.buffer as ArrayBuffer], { type: 'image/png' })),
-    createImageBitmap(new Blob([lsOverlayPng.buffer as ArrayBuffer], { type: 'image/png' })),
-  ])
-
-  // ── Compute timing ──
-  const dur    = videoFile.duration
-  const tRaw   = dur <= LOGOSHOT_TIMING.shortVideoThreshold
-    ? LOGOSHOT_TIMING.shortVideoOffset
-    : dur - LOGOSHOT_TIMING.longVideoPreroll
-  const t      = Math.min(tRaw, dur - 0.5)  // seconds
-  const tUs    = Math.round(t * 1_000_000)  // microseconds
+  const dur = videoFile.duration
+  const fps = trailerDemux.fps || 25
+  const srcH = outputFormat === 'FEED' ? trailerDemux.height : frameH
 
   // ── Set up mp4-muxer ──
   const target = new ArrayBufferTarget()
@@ -352,8 +352,6 @@ async function processOneJobWebCodecs(
 
   // ── Set up video encoder ──
   const frameCounter = { n: 0 }
-  const fps = trailerDemux.fps || 25
-
   const encoder = new VideoEncoder({
     output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
     error: (e) => { throw e },
@@ -367,47 +365,86 @@ async function processOneJobWebCodecs(
     latencyMode: 'quality',
   })
 
-  // ── Phase 1: trailer frames (0 … t) ──
-  onLog('  Decoding trailer...')
-  const srcH = outputFormat === 'FEED' ? trailerDemux.height : frameH
-  const trailerFrames = await decodeSegment(
-    trailerDemux.videoSamples,
-    trailerDemux.codec,
-    trailerDemux.description,
-    trailerDemux.width,
-    trailerDemux.height,
-    tUs,
-  )
-  onLog(`  Encoding ${trailerFrames.length} trailer frames...`)
-  await encodeFrames(trailerFrames, mainBitmap, frameW, frameH, srcH, 0, fps, encoder, frameCounter)
-
-  // ── Phase 2: logoshot frames (0 … dur−t, shifted to t) ──
-  onLog('  Decoding logoshot...')
-  const lsDurUs = Math.round((dur - t) * 1_000_000)
-  const lsFrames = await decodeSegment(
-    logoshotDemux.videoSamples,
-    logoshotDemux.codec,
-    logoshotDemux.description,
-    logoshotDemux.width,
-    logoshotDemux.height,
-    lsDurUs,
-  )
-  onLog(`  Encoding ${lsFrames.length} logoshot frames...`)
-  await encodeFrames(lsFrames, lsBitmap, frameW, frameH, frameH, tUs, fps, encoder, frameCounter)
-
-  await encoder.flush()
-  encoder.close()
-
-  // ── Audio ──
-  onLog('  Processing audio...')
   const audioChunks: { chunk: EncodedAudioChunk; meta: EncodedAudioChunkMetadata | undefined }[] = []
-  const pcm = await buildAudioBuffer(trailerDemux.audioRaw, logoshotAudioData, t, dur)
-  await encodeAudio(pcm, (chunk, meta) => audioChunks.push({ chunk, meta }))
-  for (const { chunk, meta } of audioChunks) muxer.addAudioChunk(chunk, meta)
 
-  // ── Mux ──
-  mainBitmap.close()
-  lsBitmap.close()
+  if (!taskConfig.withLogoshot) {
+    // No logoshot: apply main overlay for all trailer frames, keep original audio
+    const mainOverlayPng = await compositeMainOverlay(
+      frameW, frameH, platePng, logoPng, logoX, logoY, offerPng, offerX, offerY
+    )
+    const mainBitmap = await createImageBitmap(
+      new Blob([mainOverlayPng.buffer as ArrayBuffer], { type: 'image/png' })
+    )
+
+    onLog('  Decoding trailer...')
+    const allFrames = await decodeSegment(
+      trailerDemux.videoSamples, trailerDemux.codec, trailerDemux.description,
+      trailerDemux.width, trailerDemux.height, Math.round(dur * 1_000_000),
+    )
+    onLog(`  Encoding ${allFrames.length} frames...`)
+    await encodeFrames(allFrames, mainBitmap, frameW, frameH, srcH, 0, fps, encoder, frameCounter)
+    mainBitmap.close()
+
+    await encoder.flush()
+    encoder.close()
+
+    onLog('  Processing audio...')
+    const pcm = await buildAudioBufferFull(trailerDemux.audioRaw, dur)
+    await encodeAudio(pcm, (chunk, meta) => audioChunks.push({ chunk, meta }))
+  } else {
+    // With logoshot: trailer (0…t) then logoshot (t…end)
+    const { x: watchX, y: watchY } = layout.logoshotCta.watchNow
+    const { x: ctaX, y: ctaY }     = layout.logoshotCta.button
+
+    const [watchNowPng, ctaPng] = await Promise.all([
+      renderWatchNowText(lang, frameW),
+      renderCtaButton(ctaText, lang, frameW),
+    ])
+    const [mainOverlayPng, lsOverlayPng] = await Promise.all([
+      compositeMainOverlay(frameW, frameH, platePng, logoPng, logoX, logoY, offerPng, offerX, offerY),
+      compositeLogoshotOverlay(frameW, frameH, watchNowPng, watchX, watchY, ctaPng, ctaX, ctaY),
+    ])
+
+    const [mainBitmap, lsBitmap] = await Promise.all([
+      createImageBitmap(new Blob([mainOverlayPng.buffer as ArrayBuffer], { type: 'image/png' })),
+      createImageBitmap(new Blob([lsOverlayPng.buffer as ArrayBuffer], { type: 'image/png' })),
+    ])
+
+    const tRaw = dur <= LOGOSHOT_TIMING.shortVideoThreshold
+      ? LOGOSHOT_TIMING.shortVideoOffset
+      : dur - LOGOSHOT_TIMING.longVideoPreroll
+    const t   = Math.min(tRaw, dur - 0.5)
+    const tUs = Math.round(t * 1_000_000)
+
+    onLog('  Decoding trailer...')
+    const trailerFrames = await decodeSegment(
+      trailerDemux.videoSamples, trailerDemux.codec, trailerDemux.description,
+      trailerDemux.width, trailerDemux.height, tUs,
+    )
+    onLog(`  Encoding ${trailerFrames.length} trailer frames...`)
+    await encodeFrames(trailerFrames, mainBitmap, frameW, frameH, srcH, 0, fps, encoder, frameCounter)
+
+    onLog('  Decoding logoshot...')
+    const lsDurUs = Math.round((dur - t) * 1_000_000)
+    const lsFrames = await decodeSegment(
+      logoshotDemux!.videoSamples, logoshotDemux!.codec, logoshotDemux!.description,
+      logoshotDemux!.width, logoshotDemux!.height, lsDurUs,
+    )
+    onLog(`  Encoding ${lsFrames.length} logoshot frames...`)
+    await encodeFrames(lsFrames, lsBitmap, frameW, frameH, frameH, tUs, fps, encoder, frameCounter)
+
+    mainBitmap.close()
+    lsBitmap.close()
+
+    await encoder.flush()
+    encoder.close()
+
+    onLog('  Processing audio...')
+    const pcm = await buildAudioBuffer(trailerDemux.audioRaw, logoshotAudioData!, t, dur)
+    await encodeAudio(pcm, (chunk, meta) => audioChunks.push({ chunk, meta }))
+  }
+
+  for (const { chunk, meta } of audioChunks) muxer.addAudioChunk(chunk, meta)
   muxer.finalize()
   return new Uint8Array(target.buffer)
 }
@@ -431,17 +468,21 @@ export async function processVideoFileWebCodecs(
   const trailerDemux = await demuxMp4(videoFile.data)
 
   for (const outputFormat of formatsToProcess) {
-    // Fetch + demux logoshot video (cached)
-    const lsVidUrl = `/assets/logoshots/${LOGOSHOT_FILES[outputFormat]}`
-    const lsVidData = await fetchBytes(lsVidUrl)
-    const logoshotDemux = await demuxMp4(lsVidData)
+    // Fetch + demux logoshot video only when needed (cached after first use)
+    let logoshotDemux: DemuxResult | null = null
+    if (taskConfig.withLogoshot) {
+      const lsVidData = await fetchBytes(`/assets/logoshots/${LOGOSHOT_FILES[outputFormat]}`)
+      logoshotDemux = await demuxMp4(lsVidData)
+    }
 
     for (const lang of langs) {
       for (const version of textVersions) {
         const label = `${outputFormat}/${lang}/v${version.id}`
         onLog(`Processing: ${taskConfig.campaign}/${label}`)
         try {
-          const lsAudData = await fetchBytes(`/assets/logoshots/${LOGOSHOT_AUDIO[lang]}`)
+          const lsAudData = taskConfig.withLogoshot
+            ? await fetchBytes(`/assets/logoshots/${LOGOSHOT_AUDIO[lang]}`)
+            : null
 
           const data = await processOneJobWebCodecs(
             taskConfig, videoFile, outputFormat, lang, version,
@@ -449,7 +490,8 @@ export async function processVideoFileWebCodecs(
           )
 
           const outVer   = Math.max(videoFile.version, version.id)
-          const baseName = `${taskConfig.titleName}_${taskConfig.campaign}_${outputFormat}_${lang}_v${outVer}.mp4`
+          const durSec   = Math.round(videoFile.duration)
+          const baseName = `${taskConfig.titleName}_${taskConfig.campaign}_${outputFormat}_${lang}_v${outVer}_${durSec}s.mp4`
           const filePath = `${taskConfig.titleName}/${taskConfig.campaign}/v${outVer}/${lang}/${baseName}`
           outputs[filePath] = data
           onLog(`  ✓ ${baseName}`)

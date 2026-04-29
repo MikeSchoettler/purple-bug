@@ -17,6 +17,7 @@ export interface BrowserTaskConfig {
   versions: TextVersion[]
   logoEN: File
   logoAR: File
+  withLogoshot: boolean
 }
 
 export interface BrowserVideoFile {
@@ -162,101 +163,113 @@ async function processOneJob(
   const langLayout = layout[lang]
   const { x: logoX, y: logoY, w: logoW, h: logoH } = langLayout.titleLogo
   const { x: offerX, y: offerY, w: offerW, h: offerH } = langLayout.offerText
-  const { x: watchX, y: watchY } = layout.logoshotCta.watchNow
-  const { x: ctaX, y: ctaY }     = layout.logoshotCta.button
   const { w: frameW, h: frameH } = layout.frame
 
   const text     = lang === 'EN' ? version.mainTextEN : version.mainTextAR
   const ctaText  = lang === 'EN' ? version.ctaEN      : version.ctaAR
   const logoFile = lang === 'EN' ? taskConfig.logoEN  : taskConfig.logoAR
 
-  onLog('  Fetching plate...')
   const plateUrl = plateName(outputFormat, taskConfig.campaign, lang)
   const platePng = await getAssetBytes(plateUrl)
-  onLog(`  Plate OK (${platePng.byteLength}b)`)
 
   onLog('  Rendering PNGs...')
-  const [logoPng, offerPng, watchNowPng, ctaPng] = await Promise.all([
+  const [logoPng, offerPng] = await Promise.all([
     fitLogo(logoFile, logoW, logoH),
     renderOfferText(text, lang, offerW, offerH, outputFormat),
-    renderWatchNowText(lang, frameW),
-    renderCtaButton(ctaText, lang, frameW),
   ])
+  const mainOverlayPng = await compositeMainOverlay(
+    frameW, frameH, platePng, logoPng, logoX, logoY, offerPng, offerX, offerY
+  )
   onLog('  PNGs rendered')
 
-  onLog('  Compositing overlays...')
-  const [mainOverlayPng, lsOverlayPng] = await Promise.all([
-    compositeMainOverlay(frameW, frameH, platePng, logoPng, logoX, logoY, offerPng, offerX, offerY),
-    compositeLogoshotOverlay(frameW, frameH, watchNowPng, watchX, watchY, ctaPng, ctaX, ctaY),
-  ])
-  onLog('  Overlays composited')
+  const prefix  = `job_${outputFormat}_${lang}_v${version.id}`
+  const outFile = `${prefix}_out.mp4`
+  await ff.writeFile(`${prefix}_main.png`, mainOverlayPng)
 
-  const dur = videoFile.duration
-  const tRaw = dur <= LOGOSHOT_TIMING.shortVideoThreshold
-    ? LOGOSHOT_TIMING.shortVideoOffset
-    : dur - LOGOSHOT_TIMING.longVideoPreroll
-  // Clamp: logoshot must start at least 0.5s before video ends,
-  // otherwise atrim gets a zero/negative duration and FFmpeg hangs.
-  const t = Math.min(tRaw, dur - 0.5)
-
-  // Ensure shared assets are in FFmpeg FS (written only once per session)
-  const lsVidKey = `asset_ls_${outputFormat}.mp4`
-  const lsAudKey = `asset_lsaud_${lang}.mp3`
-  await ensureFFAsset(ff, `/assets/logoshots/${LOGOSHOT_FILES[outputFormat]}`, lsVidKey)
-  await ensureFFAsset(ff, `/assets/logoshots/${LOGOSHOT_AUDIO[lang]}`, lsAudKey)
-
-  // Write job-specific composites (unique per lang/version)
-  const prefix = `job_${outputFormat}_${lang}_v${version.id}`
-  await ff.writeFile(`${prefix}_main.png`,      mainOverlayPng)
-  await ff.writeFile(`${prefix}_lsoverlay.png`, lsOverlayPng)
-
-  // Input indices: trailer=0, mainOverlay=1, lsVid=2, lsAud=3, lsOverlay=4
   const padFilter = outputFormat === 'FEED'
     ? `[0:v]pad=1080:1350:0:0[padded];[padded]`
     : `[0:v]`
 
-  const vf =
-    padFilter +
-    `[1:v]overlay=0:0[vm];` +
-    `[2:v]setpts=PTS-STARTPTS+${t}/TB[ls];` +
-    `[vm][ls]overlay=0:0:shortest=1[vlsbase];` +
-    `[vlsbase][4:v]overlay=0:0:enable='gte(t,${t})'[vfinal]`
+  let code: number
+  const dur = videoFile.duration
 
-  const af =
-    `[0:a]atrim=0:${t},asetpts=PTS-STARTPTS[atrl];` +
-    `[3:a]atrim=0:${dur - t},asetpts=PTS-STARTPTS[als];` +
-    `[atrl][als]concat=n=2:v=0:a=1[afinal]`
+  if (!taskConfig.withLogoshot) {
+    // No logoshot: overlay main plate for the full duration, copy original audio
+    const vf = padFilter + `[1:v]overlay=0:0[vfinal]`
+    onLog('  Running FFmpeg (no logoshot)...')
+    code = await ff.exec([
+      '-i', trailerKey,
+      '-i', `${prefix}_main.png`,
+      '-filter_complex', vf,
+      '-map', '[vfinal]',
+      '-map', '0:a',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
+      '-crf', '23', '-c:a', 'copy', '-pix_fmt', 'yuv420p',
+      outFile,
+    ])
+  } else {
+    // Full path: trailer → logoshot with CTA overlay
+    const { x: watchX, y: watchY } = layout.logoshotCta.watchNow
+    const { x: ctaX, y: ctaY }     = layout.logoshotCta.button
 
-  const outFile = `${prefix}_out.mp4`
-  onLog('  Running FFmpeg...')
+    const [watchNowPng, ctaPng] = await Promise.all([
+      renderWatchNowText(lang, frameW),
+      renderCtaButton(ctaText, lang, frameW),
+    ])
+    const lsOverlayPng = await compositeLogoshotOverlay(
+      frameW, frameH, watchNowPng, watchX, watchY, ctaPng, ctaX, ctaY
+    )
 
-  const code = await ff.exec([
-    '-i', trailerKey,
-    '-i', `${prefix}_main.png`,
-    '-i', lsVidKey,
-    '-i', lsAudKey,
-    '-i', `${prefix}_lsoverlay.png`,
-    '-filter_complex', `${vf};${af}`,
-    '-map', '[vfinal]',
-    '-map', '[afinal]',
-    '-c:v', 'libx264',
-    '-preset', 'ultrafast',
-    '-tune', 'zerolatency',
-    '-crf', '23',
-    '-c:a', 'aac',
-    '-b:a', '128k',
-    '-pix_fmt', 'yuv420p',
-    outFile,
-  ])
+    const tRaw = dur <= LOGOSHOT_TIMING.shortVideoThreshold
+      ? LOGOSHOT_TIMING.shortVideoOffset
+      : dur - LOGOSHOT_TIMING.longVideoPreroll
+    // Clamp: logoshot must start at least 0.5s before video ends,
+    // otherwise atrim gets a zero/negative duration and FFmpeg hangs.
+    const t = Math.min(tRaw, dur - 0.5)
+
+    const lsVidKey = `asset_ls_${outputFormat}.mp4`
+    const lsAudKey = `asset_lsaud_${lang}.mp3`
+    await ensureFFAsset(ff, `/assets/logoshots/${LOGOSHOT_FILES[outputFormat]}`, lsVidKey)
+    await ensureFFAsset(ff, `/assets/logoshots/${LOGOSHOT_AUDIO[lang]}`, lsAudKey)
+    await ff.writeFile(`${prefix}_lsoverlay.png`, lsOverlayPng)
+
+    // Input indices: trailer=0, mainOverlay=1, lsVid=2, lsAud=3, lsOverlay=4
+    const vf =
+      padFilter +
+      `[1:v]overlay=0:0[vm];` +
+      `[2:v]setpts=PTS-STARTPTS+${t}/TB[ls];` +
+      `[vm][ls]overlay=0:0:shortest=1[vlsbase];` +
+      `[vlsbase][4:v]overlay=0:0:enable='gte(t,${t})'[vfinal]`
+
+    const af =
+      `[0:a]atrim=0:${t},asetpts=PTS-STARTPTS[atrl];` +
+      `[3:a]atrim=0:${dur - t},asetpts=PTS-STARTPTS[als];` +
+      `[atrl][als]concat=n=2:v=0:a=1[afinal]`
+
+    onLog('  Running FFmpeg...')
+    code = await ff.exec([
+      '-i', trailerKey,
+      '-i', `${prefix}_main.png`,
+      '-i', lsVidKey,
+      '-i', lsAudKey,
+      '-i', `${prefix}_lsoverlay.png`,
+      '-filter_complex', `${vf};${af}`,
+      '-map', '[vfinal]',
+      '-map', '[afinal]',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
+      '-crf', '23', '-c:a', 'aac', '-b:a', '128k', '-pix_fmt', 'yuv420p',
+      outFile,
+    ])
+
+    try { await ff.deleteFile(`${prefix}_lsoverlay.png`) } catch { /* ignore */ }
+  }
 
   if (code !== 0) throw new Error(`FFmpeg exited with code ${code}`)
 
   const output = await ff.readFile(outFile) as Uint8Array
-
-  for (const f of [`${prefix}_main.png`, `${prefix}_lsoverlay.png`, outFile]) {
+  for (const f of [`${prefix}_main.png`, outFile]) {
     try { await ff.deleteFile(f) } catch { /* ignore */ }
   }
-
   return output
 }
 
@@ -288,7 +301,8 @@ export async function processVideoFile(
           try {
             const data = await processOneJob(ff, taskConfig, videoFile, trailerKey, outputFormat, lang, version, onLog)
             const outVer   = Math.max(videoFile.version, version.id)
-            const baseName = `${taskConfig.titleName}_${taskConfig.campaign}_${outputFormat}_${lang}_v${outVer}.mp4`
+            const durSec   = Math.round(videoFile.duration)
+            const baseName = `${taskConfig.titleName}_${taskConfig.campaign}_${outputFormat}_${lang}_v${outVer}_${durSec}s.mp4`
             const filePath = `${taskConfig.titleName}/${taskConfig.campaign}/v${outVer}/${lang}/${baseName}`
             outputs[filePath] = data
             onLog(`  ✓ ${baseName}`)

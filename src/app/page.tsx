@@ -24,6 +24,7 @@ export default function Home() {
   const [logoENName, setLogoENName] = useState('')
   const [logoARName, setLogoARName] = useState('')
   const [videoNames, setVideoNames] = useState<string[]>([])
+  const [withLogoshot, setWithLogoshot] = useState(true)
   const formRef = useRef<HTMLFormElement>(null)
 
   const addLog = useCallback((msg: string) => setLog(p => [...p, msg]), [])
@@ -85,6 +86,7 @@ export default function Home() {
         versions:  taskConfig.versions,
         logoEN: logoEN!,
         logoAR: logoAR!,
+        withLogoshot,
       }
 
       const onMsg = (msg: string) => {
@@ -273,6 +275,21 @@ export default function Home() {
                 fileName={videoNames.length > 0 ? `${videoNames.length} file(s)` : ''}
                 onChange={(_, files) => setVideoNames(files ? Array.from(files).map(f => f.name) : [])}
               />
+            </div>
+            <div className="flex items-center justify-between mt-3 pt-3 border-t border-zinc-100">
+              <div>
+                <span className="text-xs font-medium text-zinc-600">Add logoshot</span>
+                <span className="text-xs text-zinc-400 ml-2">platform logo + CTA at the end</span>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={withLogoshot}
+                onClick={() => setWithLogoshot(v => !v)}
+                className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none ${withLogoshot ? 'bg-purple-600' : 'bg-zinc-300'}`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${withLogoshot ? 'translate-x-4' : 'translate-x-0.5'}`} />
+              </button>
             </div>
           </Section>
 
