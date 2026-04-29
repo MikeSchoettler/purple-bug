@@ -186,7 +186,7 @@ async function encodeAudio(
       for (let j = 0; j < frames; j++) interleaved[j * ch + c] = src[i + j]
     }
     const ad = new AudioData({
-      format: 'f32-interleaved',
+      format: 'f32',
       sampleRate,
       numberOfFrames: frames,
       numberOfChannels: ch,
