@@ -34,9 +34,8 @@ export async function ensureFonts(): Promise<void> {
     return f.load().then(f => { document.fonts.add(f) })
   }
   await Promise.all([
-    load('YangoHeadline',   '/assets/fonts/YangoGroupHeadline-ExtraBold.ttf',    '800'),
-    load('YangoHeadlineAR', '/assets/fonts/YangoGroupHeadline-ExtraBold-AR.otf', '800'),
-    load('YangoText',       '/assets/fonts/YangoGroupText-Medium.ttf',           '500'),
+    load('YangoHeadline', '/assets/fonts/YangoGroupHeadline-ExtraBold.woff2', '800'),
+    load('YangoText',     '/assets/fonts/YangoGroupText-Medium.ttf',          '500'),
   ])
   fontsLoaded = true
 }
@@ -48,7 +47,6 @@ export async function renderOfferText(
   const isAR    = lang === 'AR'
   const isWide  = format === 'WIDE'
   const isV     = format === 'V'
-  const fontFamily = isAR ? 'YangoHeadlineAR' : 'YangoHeadline'
 
   const normalized = insertCurrencyNBSP(text, lang)
   const fontSize   = offerFontSize(normalized, isWide)
@@ -59,7 +57,7 @@ export async function renderOfferText(
   canvas.height = maxH
   const ctx = canvas.getContext('2d')!
 
-  ctx.font         = `800 ${fontSize}px "${fontFamily}"`
+  ctx.font         = `800 ${fontSize}px "YangoHeadline"`
   ctx.direction    = isAR ? 'rtl' : 'ltr'
   ctx.textAlign    = isV ? 'center' : (isAR ? 'right' : 'left')
   ctx.textBaseline = 'alphabetic'
