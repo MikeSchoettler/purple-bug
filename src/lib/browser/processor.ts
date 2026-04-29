@@ -160,24 +160,26 @@ async function processOneJob(
   const ctaText  = lang === 'EN' ? version.ctaEN      : version.ctaAR
   const logoFile = lang === 'EN' ? taskConfig.logoEN  : taskConfig.logoAR
 
+  onLog('  Fetching plate...')
+  const plateUrl = plateName(outputFormat, taskConfig.campaign, lang)
+  const platePng = await getAssetBytes(plateUrl)
+  onLog(`  Plate OK (${platePng.byteLength}b)`)
+
   onLog('  Rendering PNGs...')
-
-  // Fetch plate bytes from cache (avoid re-fetch across jobs)
-  const platePng = await getAssetBytes(plateName(outputFormat, taskConfig.campaign, lang))
-
   const [logoPng, offerPng, watchNowPng, ctaPng] = await Promise.all([
     fitLogo(logoFile, logoW, logoH),
     renderOfferText(text, lang, offerW, offerH, outputFormat),
     renderWatchNowText(lang, frameW),
     renderCtaButton(ctaText, lang, frameW),
   ])
+  onLog('  PNGs rendered')
 
-  // Pre-composite browser-side: plate+logo+offer → one PNG; watchnow+cta → one PNG.
-  // Reduces FFmpeg overlays from 5 to 2.
+  onLog('  Compositing overlays...')
   const [mainOverlayPng, lsOverlayPng] = await Promise.all([
     compositeMainOverlay(frameW, frameH, platePng, logoPng, logoX, logoY, offerPng, offerX, offerY),
     compositeLogoshotOverlay(frameW, frameH, watchNowPng, watchX, watchY, ctaPng, ctaX, ctaY),
   ])
+  onLog('  Overlays composited')
 
   const dur = videoFile.duration
   const tRaw = dur <= LOGOSHOT_TIMING.shortVideoThreshold

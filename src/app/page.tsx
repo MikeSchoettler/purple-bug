@@ -66,6 +66,10 @@ export default function Home() {
       const { parseTaskFile }                                                    = await import('@/lib/parser')
       const { processVideoFile, loadFFmpeg: loadFF,
               zipSync: zipSyncFn }                                               = await import('@/lib/browser/processor')
+      const { processVideoFileWebCodecs, isWebCodecsSupported }                 = await import('@/lib/browser/webcodecs-processor')
+
+      const useWebCodecs = isWebCodecsSupported()
+      addLog(useWebCodecs ? 'Engine: WebCodecs (hardware accelerated)' : 'Engine: FFmpeg.wasm (fallback)')
 
       const taskConfig = parseTaskFile(taskText, {
         titleLogoEN: '__browser__',
@@ -91,13 +95,16 @@ export default function Home() {
         if (doneMatch) upsertOp('job', doneMatch[1], 'done')
       }
 
-      // 1. Load FFmpeg
-      setStage('loadingWasm')
-      upsertOp('wasm', 'Loading FFmpeg…', 'running')
-      const ff = await loadFF(pct => {
-        setWasmPct(pct)
-        if (pct === 100) upsertOp('wasm', 'FFmpeg ready', 'done')
-      })
+      // Only needed for FFmpeg fallback path
+      let ff: unknown = null
+      if (!useWebCodecs) {
+        setStage('loadingWasm')
+        upsertOp('wasm', 'Loading FFmpeg…', 'running')
+        ff = await loadFF((pct: number) => {
+          setWasmPct(pct)
+          if (pct === 100) upsertOp('wasm', 'FFmpeg ready', 'done')
+        })
+      }
 
       const outputs: Record<string, Uint8Array> = {}
       let totalProcessed = 0
@@ -115,19 +122,19 @@ export default function Home() {
           totalBadFormat++
           return
         }
-        // Extract version number from filename ("Version 01" → 1, "Version 02" → 2 …)
         const vMatch = name.match(/version\s*0*(\d+)/i)
         const vNum   = vMatch ? parseInt(vMatch[1], 10) : 1
         addLog(`  ${i}/${total} ${meta.width}×${meta.height} → ${fmt} v${vNum} (${meta.duration.toFixed(1)}s)`)
         const video: BrowserVideoFile = { name, format: fmt, version: vNum, data, ...meta }
-        // Only process the text version that matches this video version; fall back to
-        // first version if no exact match (e.g. single-version task with versioned clips).
         const textVersions = taskConfig.versions.filter(v => v.id === vNum)
-        const partial = await processVideoFile(
-          ff, browserConfig, video,
-          textVersions.length > 0 ? textVersions : [taskConfig.versions[0]],
-          onMsg
-        )
+        const tv = textVersions.length > 0 ? textVersions : [taskConfig.versions[0]]
+
+        let partial: Record<string, Uint8Array>
+        if (useWebCodecs) {
+          partial = await processVideoFileWebCodecs(browserConfig, video, tv, onMsg)
+        } else {
+          partial = await processVideoFile(ff, browserConfig, video, tv, onMsg)
+        }
         Object.assign(outputs, partial)
         totalProcessed++
       }
