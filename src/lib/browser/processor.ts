@@ -55,11 +55,27 @@ export async function loadFFmpeg(onProgress?: (pct: number) => void) {
       onProgress?.(Math.round(progress * 100))
     )
 
-    const base = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.9/dist/esm'
-    await ff.load({
-      coreURL:  await toBlobURL(`${base}/ffmpeg-core.js`,   'text/javascript'),
-      wasmURL:  await toBlobURL(`${base}/ffmpeg-core.wasm`, 'application/wasm'),
-    })
+    // Prefer local cache (/ffmpeg-cache/) for speed; fall back to jsDelivr CDN.
+    const localWasm = '/ffmpeg-cache/ffmpeg-core.wasm'
+    const useLocal  = (await fetch(localWasm, { method: 'HEAD' })).ok
+    const coreBase  = useLocal ? '/ffmpeg-cache' : 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.9/dist/esm'
+    // Worker deps (const.js, errors.js) must be absolute CDN URLs even in local mode
+    // because the worker blob can't resolve relative paths.
+    const ffCdn     = 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/esm'
+    const ffBase    = useLocal ? '/ffmpeg-cache' : ffCdn
+
+    // Patch worker.js: replace "./foo.js" imports with absolute CDN URLs so they
+    // resolve correctly when the script is loaded from a blob: URL.
+    const workerSrc     = await fetch(`${ffBase}/worker.js`).then(r => r.text())
+    const workerPatched = workerSrc.replace(/from ["'](\.\/[^"']+)["']/g, `from "${ffCdn}/$1"`)
+    const classWorkerURL = URL.createObjectURL(new Blob([workerPatched], { type: 'text/javascript' }))
+
+    const [coreURL, wasmURL] = await Promise.all([
+      toBlobURL(`${coreBase}/ffmpeg-core.js`,   'text/javascript'),
+      toBlobURL(`${coreBase}/ffmpeg-core.wasm`, 'application/wasm'),
+    ])
+    await ff.load({ coreURL, wasmURL, classWorkerURL })
+    onProgress?.(100)
 
     ffmpegInstance = ff
     return ff

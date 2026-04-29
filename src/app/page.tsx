@@ -54,12 +54,13 @@ export default function Home() {
     const diskUrl     = (fd.get('diskUrl')    as string).trim()
     const videoFiles  = (fd.getAll('videos')  as File[]).filter(f => f.size > 0)
 
-    if (!titleName)  return setErrorMsg('Show / film title is required')
-    if (!taskText)   return setErrorMsg('Task text is required')
-    if (!logoEN?.size) return setErrorMsg('Logo EN is required')
-    if (!logoAR?.size) return setErrorMsg('Logo AR is required')
+    const fail = (msg: string) => { setErrorMsg(msg); setStage('error') }
+    if (!titleName)  return fail('Show / film title is required')
+    if (!taskText)   return fail('Task text is required')
+    if (!logoEN?.size) return fail('Logo EN is required')
+    if (!logoAR?.size) return fail('Logo AR is required')
     if (!diskUrl && videoFiles.length === 0)
-      return setErrorMsg('Provide a Yandex Disk URL or upload video files')
+      return fail('Provide a Yandex Disk URL or upload video files')
 
     try {
       const { parseTaskFile }                          = await import('@/lib/parser')
@@ -172,7 +173,7 @@ export default function Home() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Show title</Label>
-                <Input name="titleName" type="text" placeholder="Ein Sehrya" required />
+                <Input name="titleName" type="text" placeholder="Ein Sehrya" />
               </div>
               <div>
                 <Label>Campaign</Label>

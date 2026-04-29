@@ -39,3 +39,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+public/ffmpeg-cache/
+test-assets/
+test-results/
+e2e-snapshots/

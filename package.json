@@ -23,12 +23,14 @@
     "sharp": "^0.34.5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@tailwindcss/postcss": "^4",
     "@types/archiver": "^7.0.0",
     "@types/fluent-ffmpeg": "^2.1.28",
     "@types/node": "^20.19.39",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "playwright": "^1.59.1",
     "tailwindcss": "^4",
     "typescript": "^5.9.3"
   }
