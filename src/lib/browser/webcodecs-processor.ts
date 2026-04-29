@@ -260,14 +260,19 @@ async function encodeFrames(
   const ctx = offscreen.getContext('2d')!
 
   for (const frame of frames) {
+    // Read properties before close() — after close() all VideoFrame props return null
+    const ts = frame.timestamp
+    const dw = frame.displayWidth
+    const dh = frame.displayHeight
+
     ctx.fillStyle = '#000'
     ctx.fillRect(0, 0, outputW, outputH)
     // For FEED, source is 1080×1080 drawn in the top portion of a 1080×1350 canvas
-    ctx.drawImage(frame, 0, 0, frame.displayWidth, frame.displayHeight, 0, 0, outputW, srcH)
+    ctx.drawImage(frame, 0, 0, dw, dh, 0, 0, outputW, srcH)
     ctx.drawImage(overlayBitmap, 0, 0)
     frame.close()
 
-    const outTs = frame.timestamp + timestampOffset
+    const outTs = ts + timestampOffset
     const outDur = Math.round(1_000_000 / fps)
     const vf = new VideoFrame(offscreen, { timestamp: outTs, duration: outDur })
     const keyFrame = frameCounter.n % (fps * 2) === 0  // keyframe every 2s
