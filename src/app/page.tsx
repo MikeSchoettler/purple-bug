@@ -135,6 +135,10 @@ export default function Home() {
         } else {
           partial = await processVideoFile(ff, browserConfig, video, tv, onMsg)
         }
+        const newFiles = Object.keys(partial).length
+        if (newFiles === 0) {
+          addLog(`  ✗ ${name}: all variants failed — check log above for details`)
+        }
         Object.assign(outputs, partial)
         totalProcessed++
       }
@@ -175,9 +179,13 @@ export default function Home() {
 
       if (totalProcessed === 0) {
         if (totalBadFormat > 0)
-          throw new Error(`No videos matched supported resolutions (1080×1080, 1920×1080, 1080×1920). Got: see log.`)
+          throw new Error(`No videos matched supported resolutions. Got: see log.`)
         throw new Error('No video files found or fetched')
       }
+
+      const outputCount = Object.keys(outputs).length
+      if (outputCount === 0)
+        throw new Error('Processing completed but all variants failed — open the log for details')
 
       upsertOp('zip', 'Packing ZIP…', 'running')
       const zip = zipSyncFn(outputs as Record<string, Uint8Array>, { level: 1 })

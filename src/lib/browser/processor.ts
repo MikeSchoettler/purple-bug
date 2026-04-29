@@ -102,9 +102,19 @@ export async function loadFFmpeg(onProgress?: (pct: number) => void) {
 }
 
 export function detectFormat(width: number, height: number): VideoFormat | null {
+  // Exact match first
   if (width === 1920 && height === 1080) return 'WIDE'
   if (width === 1080 && height === 1920) return 'V'
   if (width === 1080 && height === 1080) return 'SQ'
+
+  // Aspect-ratio fallback: any 16:9 landscape → WIDE, 9:16 portrait → V, 1:1 → SQ
+  if (width > 0 && height > 0) {
+    const ratio = width / height
+    if (Math.abs(ratio - 16 / 9) < 0.05 && width > height) return 'WIDE'
+    if (Math.abs(ratio - 9 / 16) < 0.05 && height > width) return 'V'
+    if (Math.abs(ratio - 1)       < 0.05)                   return 'SQ'
+  }
+
   return null
 }
 
