@@ -115,9 +115,19 @@ export default function Home() {
           totalBadFormat++
           return
         }
-        addLog(`  ${i}/${total} ${meta.width}×${meta.height} → ${fmt} (${meta.duration.toFixed(1)}s)`)
-        const video: BrowserVideoFile = { name, format: fmt, version: 1, data, ...meta }
-        const partial = await processVideoFile(ff, browserConfig, video, taskConfig.versions, onMsg)
+        // Extract version number from filename ("Version 01" → 1, "Version 02" → 2 …)
+        const vMatch = name.match(/version\s*0*(\d+)/i)
+        const vNum   = vMatch ? parseInt(vMatch[1], 10) : 1
+        addLog(`  ${i}/${total} ${meta.width}×${meta.height} → ${fmt} v${vNum} (${meta.duration.toFixed(1)}s)`)
+        const video: BrowserVideoFile = { name, format: fmt, version: vNum, data, ...meta }
+        // Only process the text version that matches this video version; fall back to
+        // first version if no exact match (e.g. single-version task with versioned clips).
+        const textVersions = taskConfig.versions.filter(v => v.id === vNum)
+        const partial = await processVideoFile(
+          ff, browserConfig, video,
+          textVersions.length > 0 ? textVersions : [taskConfig.versions[0]],
+          onMsg
+        )
         Object.assign(outputs, partial)
         totalProcessed++
       }

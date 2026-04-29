@@ -138,7 +138,7 @@ async function processOneJob(
   onLog('  Rendering PNGs...')
   const [logoPng, offerPng, watchNowPng, ctaPng] = await Promise.all([
     fitLogo(logoFile, logoW, logoH),
-    renderOfferText(text, lang, offerW, offerH),
+    renderOfferText(text, lang, offerW, offerH, outputFormat),
     renderWatchNowText(lang, frameW),
     renderCtaButton(ctaText, lang, frameW),
   ])
@@ -155,7 +155,9 @@ async function processOneJob(
 
   // Write files to FFmpeg virtual FS
   const prefix = `job_${outputFormat}_${lang}_v${version.id}`
-  await ff.writeFile(`${prefix}_trailer.mp4`,   videoFile.data)
+  // Copy the Uint8Array before passing to FFmpeg — the Worker transfer detaches the
+  // underlying ArrayBuffer, which would break subsequent calls for AR/FEED variants.
+  await ff.writeFile(`${prefix}_trailer.mp4`,   videoFile.data.slice())
   await ff.writeFile(`${prefix}_plate.png`,      plate)
   await ff.writeFile(`${prefix}_logo.png`,       logoPng)
   await ff.writeFile(`${prefix}_offer.png`,      offerPng)
@@ -186,10 +188,13 @@ async function processOneJob(
     `[${iOffer}:v]overlay=${offerX}:${offerY}[vo];` +
     `[${iLsVid}:v]setpts=PTS-STARTPTS+${t}/TB[ls];` +
     `[vo][ls]overlay=0:0:shortest=1[vlsbase];` +
+    // watchnow and cta use -loop 1 inputs (infinite streams) so no shortest needed —
+    // output duration is governed by vlsbase (the trailer) via overlay's default
+    // "end when first/base stream ends" behaviour.
     `[${iWatch}:v]fade=t=in:st=${t}:d=${fadeD}:alpha=1[fw];` +
-    `[vlsbase][fw]overlay=${watchX}:${watchY}:shortest=1[vw];` +
+    `[vlsbase][fw]overlay=${watchX}:${watchY}[vw];` +
     `[${iCta}:v]fade=t=in:st=${t}:d=${fadeD}:alpha=1[fc];` +
-    `[vw][fc]overlay=${ctaX}:${ctaY}:shortest=1[vfinal]`
+    `[vw][fc]overlay=${ctaX}:${ctaY}[vfinal]`
 
   const af =
     `[${iTrailer}:a]atrim=0:${t},asetpts=PTS-STARTPTS[atrl];` +
@@ -206,8 +211,10 @@ async function processOneJob(
     '-i', `${prefix}_offer.png`,
     '-i', `${prefix}_ls.mp4`,
     '-i', `${prefix}_lsaud.mp3`,
-    '-i', `${prefix}_watchnow.png`,
-    '-i', `${prefix}_cta.png`,
+    // -loop 1 makes static PNGs infinite streams so fade+overlay durations are
+    // governed by the base video rather than a 1-frame PNG ending immediately.
+    '-loop', '1', '-i', `${prefix}_watchnow.png`,
+    '-loop', '1', '-i', `${prefix}_cta.png`,
     '-filter_complex', `${vf};${af}`,
     '-map', '[vfinal]',
     '-map', '[afinal]',
