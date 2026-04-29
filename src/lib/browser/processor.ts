@@ -1,6 +1,4 @@
 'use client'
-import { FFmpeg } from '@ffmpeg/ffmpeg'
-import { toBlobURL } from '@ffmpeg/util'
 import { zipSync } from 'fflate'
 import type { VideoFormat, Language, CampaignType, TextVersion } from '../types'
 import {
@@ -29,16 +27,23 @@ export interface BrowserVideoFile {
   data: Uint8Array
 }
 
-let ffmpegInstance: FFmpeg | null = null
-let ffmpegLoading: Promise<FFmpeg> | null = null
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let ffmpegInstance: any = null
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let ffmpegLoading: Promise<any> | null = null
 
-export async function loadFFmpeg(onProgress?: (pct: number) => void): Promise<FFmpeg> {
+export async function loadFFmpeg(onProgress?: (pct: number) => void) {
   if (ffmpegInstance) return ffmpegInstance
   if (ffmpegLoading) return ffmpegLoading
 
   ffmpegLoading = (async () => {
+    const { FFmpeg }    = await import('@ffmpeg/ffmpeg')
+    const { toBlobURL } = await import('@ffmpeg/util')
+
     const ff = new FFmpeg()
-    ff.on('progress', ({ progress }) => onProgress?.(Math.round(progress * 100)))
+    ff.on('progress', ({ progress }: { progress: number }) =>
+      onProgress?.(Math.round(progress * 100))
+    )
 
     const base = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm'
     await ff.load({
@@ -87,8 +92,9 @@ async function fetchAsset(url: string): Promise<Uint8Array> {
   return new Uint8Array(await res.arrayBuffer())
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function processOneJob(
-  ff: FFmpeg,
+  ff: any,
   taskConfig: BrowserTaskConfig,
   videoFile: BrowserVideoFile,
   outputFormat: VideoFormat,
