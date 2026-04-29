@@ -50,7 +50,7 @@ export const LAYOUT: Record<VideoFormat, FormatLayout> = {
       titleLogo: { x: 50,  y: 752, w: 400, h: 200 },
     },
     logoshotCta: {
-      watchNow: { x: 0, y: 568, w: 1080, h: 60  },
+      watchNow: { x: 0, y: 358, w: 1080, h: 60  },
       button:   { x: 0, y: 648, w: 1080, h: 130 },
     },
   },
@@ -65,7 +65,7 @@ export const LAYOUT: Record<VideoFormat, FormatLayout> = {
       titleLogo: { x: 50,  y: 916,  w: 480, h: 240 },
     },
     logoshotCta: {
-      watchNow: { x: 0, y: 708, w: 1080, h: 60  },
+      watchNow: { x: 0, y: 498, w: 1080, h: 60  },
       button:   { x: 0, y: 790, w: 1080, h: 130 },
     },
   },
@@ -80,7 +80,7 @@ export const LAYOUT: Record<VideoFormat, FormatLayout> = {
       titleLogo: { x: 300, y: 1012, w: 480, h: 240 },
     },
     logoshotCta: {
-      watchNow: { x: 0, y: 995,  w: 1080, h: 60  },
+      watchNow: { x: 0, y: 785,  w: 1080, h: 60  },
       button:   { x: 0, y: 1075, w: 1080, h: 130 },
     },
   },
@@ -95,7 +95,7 @@ export const LAYOUT: Record<VideoFormat, FormatLayout> = {
       titleLogo: { x: 50,  y: 50, w: 600, h: 300 },
     },
     logoshotCta: {
-      watchNow: { x: 0, y: 560, w: 1920, h: 60  },
+      watchNow: { x: 0, y: 350, w: 1920, h: 60  },
       button:   { x: 0, y: 640, w: 1920, h: 130 },
     },
   },
