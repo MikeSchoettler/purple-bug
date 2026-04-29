@@ -73,6 +73,8 @@ export default function Home() {
         titleName,
         campaign: campaignVal as 'YangoPlay' | 'YangoPlay_noon' | 'YangoPlay_talabat',
       })
+      if (taskConfig.versions.length === 0)
+        return fail('Task text must contain at least one ## Main text section with text')
       const browserConfig: BrowserTaskConfig = {
         titleName: taskConfig.titleName,
         campaign:  taskConfig.campaign,
@@ -105,6 +107,8 @@ export default function Home() {
 
       const outputs: Record<string, Uint8Array> = {}
       let totalProcessed = 0
+      let totalSkipped   = 0
+      let totalBadFormat = 0
 
       // 2a. Disk videos — fetch list, then download + process one at a time
       if (diskUrl) {
@@ -128,7 +132,11 @@ export default function Home() {
           const vNum   = parseVNum(name)
           const textVersions = versionMap.get(vNum) ?? []
 
-          if (textVersions.length === 0) { addLog(`  skip ${name} (no matching text version)`); continue }
+          if (textVersions.length === 0) {
+            addLog(`  skip ${name} (v${vNum} not in task versions)`)
+            totalSkipped++
+            continue
+          }
 
           upsertOp('disk', `↓ ${i + 1}/${files.length}: ${name}`, 'running')
           addLog(`↓ ${name}`)
@@ -136,7 +144,7 @@ export default function Home() {
           const fake   = new File([data], name, { type: 'video/mp4' })
           const meta   = await getVideoMeta(fake)
           const fmt    = format ?? await detectFormat(name, meta.width, meta.height)
-          if (!fmt) { addLog(`  ✗ unknown format: ${name}`); continue }
+          if (!fmt) { addLog(`  ✗ unknown format: ${name} (${meta.width}×${meta.height})`); totalBadFormat++; continue }
 
           const partial = await processVideoFile(
             ff, browserConfig,
@@ -158,11 +166,11 @@ export default function Home() {
         for (const file of videoFiles) {
           const vNum = parseVNum(file.name)
           const textVersions = versionMap.get(vNum) ?? []
-          if (textVersions.length === 0) { addLog(`  skip ${file.name}`); continue }
+          if (textVersions.length === 0) { addLog(`  skip ${file.name} (v${vNum} not in task versions)`); totalSkipped++; continue }
 
           const meta   = await getVideoMeta(file)
           const format = await detectFormat(file.name, meta.width, meta.height)
-          if (!format) { addLog(`✗ unknown format: ${file.name}`); continue }
+          if (!format) { addLog(`✗ unknown format: ${file.name} (${meta.width}×${meta.height})`); totalBadFormat++; continue }
 
           const data    = new Uint8Array(await file.arrayBuffer())
           const partial = await processVideoFile(
@@ -175,7 +183,13 @@ export default function Home() {
         }
       }
 
-      if (totalProcessed === 0) throw new Error('No recognisable video files found')
+      if (totalProcessed === 0) {
+        if (totalBadFormat > 0)
+          throw new Error(`No video files matched known formats (SQ/WIDE/V). Check filenames contain "square", "wide", or "vertical".`)
+        if (totalSkipped > 0)
+          throw new Error(`All ${totalSkipped} video file(s) were skipped — video version numbers don't match task text versions. Check that "# Version N" numbers in the task text match "Version NN" in the video filenames.`)
+        throw new Error('No video files found or fetched')
+      }
 
       upsertOp('zip', 'Packing ZIP…', 'running')
       const zip = zipSyncFn(outputs as Record<string, Uint8Array>, { level: 1 })

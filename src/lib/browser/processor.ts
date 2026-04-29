@@ -283,9 +283,13 @@ export function mapVideoVersionsToText(
   textVersions: TextVersion[],
 ): Map<number, TextVersion[]> {
   const available = new Set(availableVideoVersions)
+  // Use the lowest available video version as fallback (not necessarily 1)
+  const fallback = availableVideoVersions.length > 0
+    ? Math.min(...availableVideoVersions)
+    : 1
   const mapping = new Map<number, TextVersion[]>()
   for (const tv of textVersions) {
-    const vid = available.has(tv.id) ? tv.id : 1
+    const vid = available.has(tv.id) ? tv.id : fallback
     if (!mapping.has(vid)) mapping.set(vid, [])
     mapping.get(vid)!.push(tv)
   }
