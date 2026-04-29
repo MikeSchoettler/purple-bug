@@ -167,7 +167,7 @@ async function buildAudioBuffer(
 
 async function encodeAudio(
   pcm: AudioBuffer,
-  onChunk: (chunk: EncodedAudioChunk, meta: EncodedAudioChunkMetadata) => void,
+  onChunk: (chunk: EncodedAudioChunk, meta: EncodedAudioChunkMetadata | undefined) => void,
 ): Promise<void> {
   const FRAME = 1024
   const { numberOfChannels: ch, sampleRate, length } = pcm
@@ -389,7 +389,7 @@ async function processOneJobWebCodecs(
 
   // ── Audio ──
   onLog('  Processing audio...')
-  const audioChunks: { chunk: EncodedAudioChunk; meta: EncodedAudioChunkMetadata }[] = []
+  const audioChunks: { chunk: EncodedAudioChunk; meta: EncodedAudioChunkMetadata | undefined }[] = []
   const pcm = await buildAudioBuffer(trailerDemux.audioRaw, logoshotAudioData, t, dur)
   await encodeAudio(pcm, (chunk, meta) => audioChunks.push({ chunk, meta }))
   for (const { chunk, meta } of audioChunks) muxer.addAudioChunk(chunk, meta)
