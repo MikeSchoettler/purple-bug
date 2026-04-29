@@ -1,5 +1,6 @@
 'use client'
 import { zipSync } from 'fflate'
+export { zipSync }
 import type { VideoFormat, Language, CampaignType, TextVersion } from '../types'
 import {
   LAYOUT, LOGOSHOT_TIMING, LOGOSHOT_FILES, LOGOSHOT_AUDIO,
@@ -240,49 +241,74 @@ async function processOneJob(
   return output
 }
 
+// Process one video file for the given text versions. Returns partial outputs
+// (filename → data). Call for each video sequentially to keep memory low.
+export async function processVideoFile(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ff: any,
+  taskConfig: BrowserTaskConfig,
+  videoFile: BrowserVideoFile,
+  textVersions: TextVersion[],
+  onLog: (msg: string) => void,
+): Promise<Record<string, Uint8Array>> {
+  await ensureFonts()
+  const langs: Language[] = ['EN', 'AR']
+  const formatsToProcess: VideoFormat[] = videoFile.format === 'SQ' ? ['SQ', 'FEED'] : [videoFile.format]
+  const outputs: Record<string, Uint8Array> = {}
+
+  for (const version of textVersions) {
+    for (const outputFormat of formatsToProcess) {
+      for (const lang of langs) {
+        const label = `${taskConfig.campaign}/${lang}/${outputFormat}/v${version.id}`
+        onLog(`Processing: ${label}`)
+        try {
+          const data = await processOneJob(ff, taskConfig, videoFile, outputFormat, lang, version, onLog)
+          const filename = `${taskConfig.titleName}_${taskConfig.campaign}_${outputFormat}_${lang}_v${version.id}.mp4`
+          outputs[filename] = data
+          onLog(`  ✓ ${filename}`)
+        } catch (err) {
+          onLog(`  ✗ Failed: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+    }
+  }
+
+  return outputs
+}
+
+// Given the set of available video version numbers and the text versions in the
+// task config, compute which text versions each video version should serve.
+export function mapVideoVersionsToText(
+  availableVideoVersions: number[],
+  textVersions: TextVersion[],
+): Map<number, TextVersion[]> {
+  const available = new Set(availableVideoVersions)
+  const mapping = new Map<number, TextVersion[]>()
+  for (const tv of textVersions) {
+    const vid = available.has(tv.id) ? tv.id : 1
+    if (!mapping.has(vid)) mapping.set(vid, [])
+    mapping.get(vid)!.push(tv)
+  }
+  return mapping
+}
+
 export async function runBrowserPipeline(
   taskConfig: BrowserTaskConfig,
   videos: BrowserVideoFile[],
   onLog: (msg: string) => void,
   onFFmpegProgress: (pct: number) => void
 ): Promise<Uint8Array> {
-  await ensureFonts()
   const ff = await loadFFmpeg(onFFmpegProgress)
-
-  const byVersion = new Map<number, Map<VideoFormat, BrowserVideoFile>>()
-  for (const v of videos) {
-    if (!byVersion.has(v.version)) byVersion.set(v.version, new Map())
-    byVersion.get(v.version)!.set(v.format, v)
-  }
-
-  const langs: Language[] = ['EN', 'AR']
+  const versionMap = mapVideoVersionsToText(
+    videos.map(v => v.version),
+    taskConfig.versions,
+  )
   const outputs: Record<string, Uint8Array> = {}
-
-  for (const version of taskConfig.versions) {
-    const vVideos = byVersion.get(version.id) ?? byVersion.get(1)
-    if (!vVideos) { onLog(`No videos for version ${version.id}, skipping`); continue }
-
-    for (const [vFormat, videoFile] of vVideos) {
-      const formatsToProcess: VideoFormat[] = vFormat === 'SQ' ? ['SQ', 'FEED'] : [vFormat]
-
-      for (const outputFormat of formatsToProcess) {
-        for (const lang of langs) {
-          const label = `${taskConfig.campaign}/${lang}/${outputFormat}/v${version.id}`
-          onLog(`Processing: ${label}`)
-          try {
-            const data = await processOneJob(ff, taskConfig, videoFile, outputFormat, lang, version, onLog)
-            const filename = `${taskConfig.titleName}_${taskConfig.campaign}_${outputFormat}_${lang}_v${version.id}.mp4`
-            outputs[filename] = data
-            onLog(`  ✓ ${filename}`)
-          } catch (err) {
-            onLog(`  ✗ Failed: ${err instanceof Error ? err.message : String(err)}`)
-          }
-        }
-      }
-    }
+  for (const video of videos) {
+    const textVersions = versionMap.get(video.version) ?? []
+    if (textVersions.length === 0) continue
+    Object.assign(outputs, await processVideoFile(ff, taskConfig, video, textVersions, onLog))
   }
-
   onLog('Packing ZIP...')
-  const zip = zipSync(outputs as Record<string, Uint8Array>, { level: 1 })
-  return zip
+  return zipSync(outputs as Record<string, Uint8Array>, { level: 1 })
 }

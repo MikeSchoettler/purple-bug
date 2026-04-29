@@ -63,8 +63,9 @@ export default function Home() {
       return fail('Provide a Yandex Disk URL or upload video files')
 
     try {
-      const { parseTaskFile }                          = await import('@/lib/parser')
-      const { runBrowserPipeline, loadFFmpeg: loadFF } = await import('@/lib/browser/processor')
+      const { parseTaskFile }                                                    = await import('@/lib/parser')
+      const { processVideoFile, mapVideoVersionsToText, loadFFmpeg: loadFF,
+              zipSync: zipSyncFn }                                               = await import('@/lib/browser/processor')
 
       const taskConfig = parseTaskFile(taskText, {
         titleLogoEN: '__browser__',
@@ -80,69 +81,105 @@ export default function Home() {
         logoAR: logoAR!,
       }
 
+      const onMsg = (msg: string) => {
+        addLog(msg)
+        const jobMatch  = msg.match(/Processing:\s*(.+)/)
+        if (jobMatch)  upsertOp('job', jobMatch[1], 'running')
+        const doneMatch = msg.match(/✓\s*(.+\.mp4)/)
+        if (doneMatch) upsertOp('job', doneMatch[1], 'done')
+      }
+
       // 1. Load FFmpeg
       setStage('loadingWasm')
       upsertOp('wasm', 'Loading FFmpeg…', 'running')
-      await loadFF(pct => {
+      const ff = await loadFF(pct => {
         setWasmPct(pct)
         if (pct === 100) upsertOp('wasm', 'FFmpeg ready', 'done')
       })
 
-      // 2. Collect videos
-      setStage('scanning')
-      const allVideos: BrowserVideoFile[] = []
+      // Helper: extract version number from filename
+      const parseVNum = (name: string) => {
+        const m = name.match(/(?:version\s*|_v?|v)(\d+)/i)
+        return m ? parseInt(m[1], 10) : 1
+      }
 
+      const outputs: Record<string, Uint8Array> = {}
+      let totalProcessed = 0
+
+      // 2a. Disk videos — fetch list, then download + process one at a time
       if (diskUrl) {
-        upsertOp('disk', 'Fetching files from Yandex Disk…', 'running')
+        setStage('scanning')
+        upsertOp('disk', 'Fetching file list from Yandex Disk…', 'running')
         addLog('Fetching file list from Yandex Disk...')
         const res  = await fetch(`/api/disk-proxy?diskUrl=${encodeURIComponent(diskUrl)}`)
         const json = await res.json()
         if (!res.ok) throw new Error(json.error ?? 'Disk proxy error')
 
-        upsertOp('disk', `Downloading ${json.files.length} video(s)…`, 'running')
-        for (const { name, downloadUrl: dlUrl } of json.files as { name: string; downloadUrl: string }[]) {
+        const files = json.files as { name: string; downloadUrl: string }[]
+        upsertOp('disk', `${files.length} file(s) found`, 'done')
+
+        const videoVersions = files.map(f => parseVNum(f.name))
+        const versionMap    = mapVideoVersionsToText(videoVersions, taskConfig.versions)
+
+        setStage('processing')
+        for (let i = 0; i < files.length; i++) {
+          const { name, downloadUrl: dlUrl } = files[i]
+          const format = await detectFormat(name, 0, 0)  // try name-based first
+          const vNum   = parseVNum(name)
+          const textVersions = versionMap.get(vNum) ?? []
+
+          if (textVersions.length === 0) { addLog(`  skip ${name} (no matching text version)`); continue }
+
+          upsertOp('disk', `↓ ${i + 1}/${files.length}: ${name}`, 'running')
           addLog(`↓ ${name}`)
           const data   = new Uint8Array(await (await fetch(dlUrl)).arrayBuffer())
           const fake   = new File([data], name, { type: 'video/mp4' })
           const meta   = await getVideoMeta(fake)
-          const format = await detectFormat(name, meta.width, meta.height)
-          if (!format) { addLog(`  ✗ unknown format: ${name}`); continue }
-          const vNum   = name.match(/(?:version\s*|_v?|v)(\d+)/i)
-          allVideos.push({ name, format, version: vNum ? parseInt(vNum[1], 10) : 1, data, ...meta })
+          const fmt    = format ?? await detectFormat(name, meta.width, meta.height)
+          if (!fmt) { addLog(`  ✗ unknown format: ${name}`); continue }
+
+          const partial = await processVideoFile(
+            ff, browserConfig,
+            { name, format: fmt, version: vNum, data, ...meta },
+            textVersions, onMsg,
+          )
+          Object.assign(outputs, partial)
+          totalProcessed++
         }
-        upsertOp('disk', `${allVideos.length} video(s) ready`, 'done')
+        upsertOp('disk', 'All disk videos done', 'done')
       }
 
-      for (const file of videoFiles) {
-        const meta   = await getVideoMeta(file)
-        const format = await detectFormat(file.name, meta.width, meta.height)
-        if (!format) { addLog(`✗ unknown format: ${file.name}`); continue }
-        const vNum   = file.name.match(/(?:version\s*|_v?|v)(\d+)/i)
-        allVideos.push({
-          name: file.name, format,
-          version: vNum ? parseInt(vNum[1], 10) : 1,
-          data: new Uint8Array(await file.arrayBuffer()), ...meta,
-        })
+      // 2b. Locally uploaded files — process one at a time
+      if (videoFiles.length > 0) {
+        setStage('processing')
+        const videoVersions = videoFiles.map(f => parseVNum(f.name))
+        const versionMap    = mapVideoVersionsToText(videoVersions, taskConfig.versions)
+
+        for (const file of videoFiles) {
+          const vNum = parseVNum(file.name)
+          const textVersions = versionMap.get(vNum) ?? []
+          if (textVersions.length === 0) { addLog(`  skip ${file.name}`); continue }
+
+          const meta   = await getVideoMeta(file)
+          const format = await detectFormat(file.name, meta.width, meta.height)
+          if (!format) { addLog(`✗ unknown format: ${file.name}`); continue }
+
+          const data    = new Uint8Array(await file.arrayBuffer())
+          const partial = await processVideoFile(
+            ff, browserConfig,
+            { name: file.name, format, version: vNum, data, ...meta },
+            textVersions, onMsg,
+          )
+          Object.assign(outputs, partial)
+          totalProcessed++
+        }
       }
 
-      if (allVideos.length === 0) throw new Error('No recognisable video files found')
+      if (totalProcessed === 0) throw new Error('No recognisable video files found')
 
-      // 3. Process
-      setStage('processing')
-      const zip = await runBrowserPipeline(
-        browserConfig,
-        allVideos,
-        msg => {
-          addLog(msg)
-          const jobMatch = msg.match(/Processing:\s*(.+)/)
-          if (jobMatch) upsertOp('job', jobMatch[1], 'running')
-          const doneMatch = msg.match(/✓\s*(.+\.mp4)/)
-          if (doneMatch) upsertOp('job', doneMatch[1], 'done')
-          if (msg.startsWith('Packing ZIP')) upsertOp('zip', 'Packing ZIP…', 'running')
-          if (msg.startsWith('Done!'))       upsertOp('zip', msg, 'done')
-        },
-        pct => setWasmPct(pct),
-      )
+      upsertOp('zip', 'Packing ZIP…', 'running')
+      const zip = zipSyncFn(outputs as Record<string, Uint8Array>, { level: 1 })
+      upsertOp('zip', 'ZIP ready', 'done')
 
       const blob = new Blob([zip.buffer as ArrayBuffer], { type: 'application/zip' })
       setDownloadUrl(URL.createObjectURL(blob))
