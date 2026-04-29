@@ -180,9 +180,12 @@ async function processOneJob(
   ])
 
   const dur = videoFile.duration
-  const t = dur <= LOGOSHOT_TIMING.shortVideoThreshold
+  const tRaw = dur <= LOGOSHOT_TIMING.shortVideoThreshold
     ? LOGOSHOT_TIMING.shortVideoOffset
     : dur - LOGOSHOT_TIMING.longVideoPreroll
+  // Clamp: logoshot must start at least 0.5s before video ends,
+  // otherwise atrim gets a zero/negative duration and FFmpeg hangs.
+  const t = Math.min(tRaw, dur - 0.5)
 
   // Ensure shared assets are in FFmpeg FS (written only once per session)
   const lsVidKey = `asset_ls_${outputFormat}.mp4`
