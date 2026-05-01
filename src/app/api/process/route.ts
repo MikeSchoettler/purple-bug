@@ -78,11 +78,12 @@ export async function POST(req: NextRequest) {
     const zipBuffer = fs.readFileSync(zipPath)
     fs.rmSync(tmpDir, { recursive: true, force: true })
 
+    // HTTP headers must be Latin-1; sanitize filename and drop emoji-heavy log header
+    const safeTitle = taskConfig.titleName.replace(/[^\x20-\x7E]/g, '_')
     return new NextResponse(zipBuffer, {
       headers: {
         'Content-Type': 'application/zip',
-        'Content-Disposition': `attachment; filename="${taskConfig.titleName}_creatives.zip"`,
-        'X-Processing-Log': JSON.stringify(logs),
+        'Content-Disposition': `attachment; filename="${safeTitle}_creatives.zip"`,
       },
     })
   } catch (err) {
