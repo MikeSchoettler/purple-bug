@@ -64,6 +64,9 @@ export async function POST(req: NextRequest) {
     const outputDir = path.join(tmpDir, 'output')
     const result = await runPipeline(taskConfig, videosDir, outputDir, msg => logs.push(msg))
 
+    // Free source videos before zipping — they're no longer needed and Vercel /tmp is limited
+    fs.rmSync(videosDir, { recursive: true, force: true })
+
     if (result.outputs.length === 0) {
       return NextResponse.json({ error: 'No outputs generated', logs, errors: result.errors }, { status: 500 })
     }
