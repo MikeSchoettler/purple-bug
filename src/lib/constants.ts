@@ -7,7 +7,7 @@ export const PLATES_DIR = path.join(ASSETS_DIR, 'plates')
 export const LOGOSHOTS_DIR = path.join(ASSETS_DIR, 'logoshots')
 
 export const FONT_HEADLINE    = path.join(FONTS_DIR, 'YangoGroupHeadline-ExtraBold.ttf')
-export const FONT_HEADLINE_AR = path.join(FONTS_DIR, 'YangoGroupHeadline-ExtraBold-AR.otf')
+export const FONT_HEADLINE_AR = FONT_HEADLINE  // same font supports Arabic
 export const FONT_TEXT        = path.join(FONTS_DIR, 'YangoGroupText-Medium.ttf')
 
 // Offer text gradient: white (top) → gold (bottom)
