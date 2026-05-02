@@ -26,14 +26,16 @@ export async function runPipeline(
   log(`Found ${videos.length} video(s): ${videos.map(v => `${v.format} v${v.version}`).join(', ')}`)
 
   const byVersion = groupByVersion(videos)
+  const videoGroupIds = [...byVersion.keys()].sort((a, b) => a - b)
+  log(`Grouped into ${videoGroupIds.length} video group(s)`)
+
   const languages: Language[] = ['EN', 'AR']
 
-  for (const version of taskConfig.versions) {
-    const versionVideos = byVersion.get(version.id) ?? byVersion.get(1)
-    if (!versionVideos) {
-      log(`Warning: no videos for version ${version.id}, skipping`)
-      continue
-    }
+  // Iterate all video groups. Map each to a text version by ID; cycle if fewer text versions.
+  for (const videoGroupId of videoGroupIds) {
+    const versionVideos = byVersion.get(videoGroupId)!
+    const version = taskConfig.versions.find(v => v.id === videoGroupId)
+      ?? taskConfig.versions[(videoGroupId - 1) % taskConfig.versions.length]
 
     for (const [vFormat, videoFile] of versionVideos) {
       const formatsToProcess: VideoFormat[] = vFormat === 'SQ' ? ['SQ', 'FEED'] : [vFormat]
@@ -41,10 +43,10 @@ export async function runPipeline(
       for (const outputFormat of formatsToProcess) {
         for (const lang of languages) {
           const outputPath = buildOutputPath(
-            outputBaseDir, taskConfig.titleName, taskConfig.campaign, lang, outputFormat, version.id
+            outputBaseDir, taskConfig.titleName, taskConfig.campaign, lang, outputFormat, videoGroupId
           )
 
-          log(`Processing: ${taskConfig.campaign} / ${lang} / ${outputFormat} / v${version.id}`)
+          log(`Processing: ${taskConfig.campaign} / ${lang} / ${outputFormat} / group${videoGroupId}`)
           try {
             const result = await processJob({
               taskConfig,

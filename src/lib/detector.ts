@@ -59,12 +59,20 @@ export function detectFormat(filename: string, width: number, height: number): V
   return null
 }
 
-// Group video files by version, returning all formats for each version
+// Group video files by version. Multiple videos of the same format are assigned
+// sequential version numbers so all source videos are processed (not just the last one).
 export function groupByVersion(videos: VideoFile[]): Map<number, Map<VideoFormat, VideoFile>> {
   const map = new Map<number, Map<VideoFormat, VideoFile>>()
 
-  for (const video of videos) {
-    const v = video.version ?? 1
+  // Stable sort by filename so grouping is deterministic
+  const sorted = [...videos].sort((a, b) =>
+    path.basename(a.path).localeCompare(path.basename(b.path))
+  )
+
+  for (const video of sorted) {
+    let v = video.version ?? 1
+    // If this (version, format) slot is already taken, bump to next free version
+    while (map.get(v)?.has(video.format)) v++
     if (!map.has(v)) map.set(v, new Map())
     map.get(v)!.set(video.format, video)
   }
