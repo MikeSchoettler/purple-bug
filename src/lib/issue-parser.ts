@@ -47,18 +47,20 @@ export function parseFormDescription(description: string): FormAnswers {
   const result: FormAnswers = {}
 
   // Extract answer text after an exact label.
-  // Handles both Yandex Forms markdown format: **Label**\n```\nValue\n```
-  // and plain format: Label:\nValue
+  // Handles Yandex Forms markdown format with optional blank line before code block:
+  //   **Label**\n\n```\nValue\n```   (new format)
+  //   **Label**\n```\nValue\n```     (old format)
+  // Also handles plain text fields (no code block, e.g. Copy).
   function extract(label: string): string | undefined {
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    // Markdown code block format (Yandex Forms → Tracker integration)
+    // Code block format — allow optional blank line between label and ```
     const mdMatch = description.match(
-      new RegExp(`\\*\\*${escaped}[^*]*\\*\\*[^\\n]*\\n\`\`\`\\n([\\s\\S]*?)\\n\`\`\``, 'i')
+      new RegExp(`\\*\\*${escaped}[^*]*\\*\\*[^\\n]*\\n\\n?\`\`\`\\n([\\s\\S]*?)\\n\`\`\``, 'i')
     )
     if (mdMatch) return mdMatch[1].trim() || undefined
-    // Plain format fallback
+    // Plain text format (no code block) — read until next **Bold** label or end
     const plainMatch = description.match(
-      new RegExp(`${escaped}[:\\s]*\\n([\\s\\S]*?)(?=\\n\\S[^\\n]{2,}[:\\n?]|$)`, 'i')
+      new RegExp(`\\*\\*${escaped}[^*]*\\*\\*[^\\n]*\\n\\n([\\s\\S]*?)(?=\\n\\n\\*\\*|$)`, 'i')
     )
     return plainMatch?.[1]?.trim() || undefined
   }

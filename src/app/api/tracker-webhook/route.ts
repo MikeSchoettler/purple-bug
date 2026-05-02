@@ -18,10 +18,11 @@ const ROBOT_LOGIN = 'robot-bolty'
 const GENERATION_STATUS_KEY = 'inProgressAtVendor'
 
 // Signatures used to detect existing robot comments
-const SIG_ASSESSMENT = '🤖 **Проверка данных'
-const SIG_ALL_GOOD   = '🤖 **Все данные собраны'
-const SIG_GENERATION = '🤖 **Начинаю генерацию'
-const SIG_DONE       = '🤖 **Генерация завершена'
+const SIG_ASSESSMENT  = '🤖 **Проверка данных'
+const SIG_ALL_GOOD    = '🤖 **Все данные собраны'
+const SIG_GENERATION  = '🤖 **Начинаю генерацию'
+const SIG_DONE        = '🤖 **Генерация завершена'
+const SIG_CANT_START  = '🤖 **Не могу начать'
 
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>
@@ -55,6 +56,7 @@ export async function POST(req: NextRequest) {
 
   if (isPhase2) {
     // Dedup: skip if generation already started in last 15 minutes
+    // SIG_CANT_START is excluded — materials may have been fixed, retry should be immediate
     const recentGen = robotComments.find(c =>
       (c.text.startsWith(SIG_GENERATION) || c.text.startsWith(SIG_DONE)) &&
       Date.now() - new Date(c.createdAt).getTime() < 15 * 60_000
@@ -293,7 +295,7 @@ function buildChecklist(ctx: {
     },
     {
       label: 'Логошот',
-      ok: form.hasLogoshot !== undefined,
+      ok: true,  // undefined = default "yes"; any value is valid
       note: form.hasLogoshot === undefined
         ? 'не указан (по умолчанию — есть)'
         : form.hasLogoshot ? 'есть' : 'нет',

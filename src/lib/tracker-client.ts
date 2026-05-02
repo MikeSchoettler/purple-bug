@@ -1,28 +1,62 @@
+// When TRACKER_PROXY_URL is set, all Tracker API calls are routed through the
+// proxy as POST {path, method, data, binary?, attach?}. The proxy adds the
+// robot-bolty OAuth header and forwards to st-api.yandex-team.ru.
+// Without a proxy, direct OAuth calls are made using ROBOT_BOLTY_TOKEN.
+
 async function trackerFetch<T>(
   path: string,
-  options: RequestInit = {}
+  options: { method?: string; body?: string } = {}
 ): Promise<T> {
   const proxyUrl = process.env.TRACKER_PROXY_URL
-  const base = (proxyUrl ?? 'https://st-api.yandex-team.ru') + '/v2'
 
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (proxyUrl) {
-    if (process.env.PROXY_SECRET) headers['X-Proxy-Secret'] = process.env.PROXY_SECRET
-  } else {
-    const t = process.env.TRACKER_TOKEN ?? process.env.ROBOT_BOLTY_TOKEN
-    if (!t) throw new Error('No Tracker OAuth token configured (TRACKER_TOKEN or ROBOT_BOLTY_TOKEN)')
-    headers['Authorization'] = `OAuth ${t}`
+    return proxyCall<T>(proxyUrl, {
+      path: '/v2' + path,
+      method: options.method ?? 'GET',
+      data: options.body ? JSON.parse(options.body) : undefined,
+    })
   }
 
-  const res = await fetch(`${base}${path}`, {
-    ...options,
-    headers: { ...headers, ...(options.headers ?? {}) },
+  const token = process.env.TRACKER_TOKEN ?? process.env.ROBOT_BOLTY_TOKEN
+  if (!token) throw new Error('No Tracker OAuth token configured')
+
+  const res = await fetch('https://st-api.yandex-team.ru/v2' + path, {
+    method: options.method ?? 'GET',
+    headers: {
+      'Authorization': `OAuth ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: options.body,
   })
   if (!res.ok) {
     const text = await res.text()
     throw new Error(`Tracker API ${res.status} for ${path}: ${text}`)
   }
   return res.json() as Promise<T>
+}
+
+async function proxyCall<T>(
+  proxyUrl: string,
+  payload: { path: string; method: string; data?: unknown; binary?: boolean; attach?: unknown },
+): Promise<T> {
+  const res = await fetch(proxyUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-proxy-secret': process.env.PROXY_SECRET ?? '',
+    },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Proxy ${res.status}: ${text}`)
+  }
+  const wrapper = await res.json() as { status: number; body?: T; data?: string; error?: string }
+  if (wrapper.error) throw new Error(wrapper.error)
+  if (wrapper.status && wrapper.status >= 400) {
+    throw new Error(`Tracker API ${wrapper.status} for ${payload.path}: ${JSON.stringify(wrapper.body)}`)
+  }
+  return (wrapper.data !== undefined ? wrapper.data : wrapper.body) as T
 }
 
 export interface TrackerUser {
@@ -44,8 +78,6 @@ export interface TrackerIssue {
   createdBy: TrackerUser
   assignee?: TrackerUser
   components?: Array<{ display: string }>
-  approvementId?: string
-  approvementStatus?: string
 }
 
 export interface TrackerAttachment {
@@ -57,6 +89,13 @@ export interface TrackerAttachment {
   createdAt: string
 }
 
+export interface TrackerComment {
+  id: string
+  createdBy: TrackerUser
+  createdAt: string
+  text: string
+}
+
 export async function getIssue(key: string): Promise<TrackerIssue> {
   return trackerFetch<TrackerIssue>(`/issues/${key}`)
 }
@@ -65,31 +104,14 @@ export async function getAttachments(key: string): Promise<TrackerAttachment[]> 
   return trackerFetch<TrackerAttachment[]>(`/issues/${key}/attachments`)
 }
 
-export async function downloadAttachment(attachment: TrackerAttachment): Promise<Buffer> {
-  const proxyUrl = process.env.TRACKER_PROXY_URL
-  const headers: Record<string, string> = {}
-  if (proxyUrl) {
-    if (process.env.PROXY_SECRET) headers['X-Proxy-Secret'] = process.env.PROXY_SECRET
-  } else {
-    const t = process.env.TRACKER_TOKEN ?? process.env.ROBOT_BOLTY_TOKEN
-    if (t) headers['Authorization'] = `OAuth ${t}`
-  }
-  const res = await fetch(attachment.content, { headers })
-  if (!res.ok) throw new Error(`Failed to download attachment ${attachment.name}: ${res.status}`)
-  return Buffer.from(await res.arrayBuffer())
+export async function getComments(key: string): Promise<TrackerComment[]> {
+  return trackerFetch<TrackerComment[]>(`/issues/${key}/comments`)
 }
 
 export async function postComment(key: string, text: string): Promise<void> {
   await trackerFetch(`/issues/${key}/comments`, {
     method: 'POST',
     body: JSON.stringify({ text }),
-  })
-}
-
-export async function changeStatus(key: string, transition: string): Promise<void> {
-  await trackerFetch(`/issues/${key}/transitions/${transition}/_execute`, {
-    method: 'POST',
-    body: JSON.stringify({}),
   })
 }
 
@@ -100,19 +122,38 @@ export async function patchIssue(key: string, fields: Record<string, unknown>): 
   })
 }
 
+export async function changeStatus(key: string, transition: string): Promise<void> {
+  await trackerFetch(`/issues/${key}/transitions/${transition}/_execute`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
 export async function getTransitions(key: string): Promise<Array<{ id: string; display: string }>> {
   return trackerFetch<Array<{ id: string; display: string }>>(`/issues/${key}/transitions`)
 }
 
-export interface TrackerComment {
-  id: string
-  createdBy: TrackerUser
-  createdAt: string
-  text: string
-}
+export async function downloadAttachment(attachment: TrackerAttachment): Promise<Buffer> {
+  const proxyUrl = process.env.TRACKER_PROXY_URL
 
-export async function getComments(key: string): Promise<TrackerComment[]> {
-  return trackerFetch<TrackerComment[]>(`/issues/${key}/comments`)
+  if (proxyUrl) {
+    // Attachment URL is absolute; strip the base to get path for the proxy
+    const url = new URL(attachment.content)
+    const path = url.pathname + url.search
+    const result = await proxyCall<string>(proxyUrl, {
+      path,
+      method: 'GET',
+      binary: true,
+    })
+    return Buffer.from(result as string, 'base64')
+  }
+
+  const token = process.env.TRACKER_TOKEN ?? process.env.ROBOT_BOLTY_TOKEN
+  const headers: Record<string, string> = {}
+  if (token) headers['Authorization'] = `OAuth ${token}`
+  const res = await fetch(attachment.content, { headers })
+  if (!res.ok) throw new Error(`Failed to download attachment ${attachment.name}: ${res.status}`)
+  return Buffer.from(await res.arrayBuffer())
 }
 
 export async function attachFile(
@@ -122,24 +163,30 @@ export async function attachFile(
   mimeType: string,
 ): Promise<void> {
   const proxyUrl = process.env.TRACKER_PROXY_URL
-  const base = (proxyUrl ?? 'https://st-api.yandex-team.ru') + '/v2'
 
-  const headers: Record<string, string> = {}
   if (proxyUrl) {
-    if (process.env.PROXY_SECRET) headers['X-Proxy-Secret'] = process.env.PROXY_SECRET
-  } else {
-    const t = process.env.TRACKER_TOKEN ?? process.env.ROBOT_BOLTY_TOKEN
-    if (!t) throw new Error('No Tracker OAuth token configured')
-    headers['Authorization'] = `OAuth ${t}`
+    await proxyCall<unknown>(proxyUrl, {
+      path: `/v2/issues/${key}/attachments`,
+      method: 'POST',
+      attach: {
+        name: filename,
+        type: mimeType,
+        data: buffer.toString('base64'),
+      },
+    })
+    return
   }
+
+  const token = process.env.TRACKER_TOKEN ?? process.env.ROBOT_BOLTY_TOKEN
+  if (!token) throw new Error('No Tracker OAuth token configured')
 
   const form = new FormData()
   const ab = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer
   form.append('file', new Blob([ab], { type: mimeType }), filename)
 
-  const res = await fetch(`${base}/issues/${key}/attachments`, {
+  const res = await fetch(`https://st-api.yandex-team.ru/v2/issues/${key}/attachments`, {
     method: 'POST',
-    headers,
+    headers: { 'Authorization': `OAuth ${token}` },
     body: form,
   })
   if (!res.ok) {

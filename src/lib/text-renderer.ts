@@ -20,27 +20,28 @@ export async function renderOfferText(text: string, lang: Language, maxW: number
   const fontSize = 64
   const lineHeight = 1.15
   const direction = isAR ? 'rtl' : 'ltr'
-  const textAnchor = isAR ? 'end' : 'start'
+  // SVG "start" = inline-start: right edge for RTL, left edge for LTR — correct for both
+  const textAnchor = 'start'
   const textX = isAR ? maxW - 32 : 32
   const [g0, g1] = [OFFER_TEXT_GRADIENT.stops[0], OFFER_TEXT_GRADIENT.stops[1]]
 
   // Wrap text into lines that fit within maxW
-  const lines = wrapText(text, maxW - 64, fontSize)
+  const lines = wrapText(text, maxW - 64, fontSize, isAR)
   const totalH = Math.min(lines.length * fontSize * lineHeight + 20, maxH)
 
+  // y: set baseline so the ascenders start at ~y=0 in the canvas (0.85 ≈ cap-height ratio)
   const linesSVG = lines.map((line, i) => `
     <text
-      x="${textX}" y="${(i + 1) * fontSize * lineHeight}"
+      x="${textX}" y="${fontSize * 0.85 + i * fontSize * lineHeight}"
       font-family="${fontFamily}" font-size="${fontSize}"
       fill="url(#offerGrad)"
-      direction="${direction}" text-anchor="${textAnchor}"
-      dominant-baseline="auto"
+      direction="${direction}" unicode-bidi="embed" text-anchor="${textAnchor}"
     >${escapeXml(line)}</text>`).join('')
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${maxW}" height="${totalH}">
     <defs>
       <style>@font-face { font-family: '${fontFamily}'; src: url('${fUri}'); }</style>
-      <linearGradient id="offerGrad" x1="0" y1="0" x2="0" y2="1">
+      <linearGradient id="offerGrad" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="${totalH}">
         <stop offset="${g0.offset * 100}%" stop-color="${g0.color}"/>
         <stop offset="${g1.offset * 100}%" stop-color="${g1.color}"/>
       </linearGradient>
@@ -67,10 +68,11 @@ export async function renderWatchNowText(lang: Language, frameW: number): Promis
       <style>@font-face { font-family: '${fontFamily}'; src: url('${fUri}'); }</style>
     </defs>
     <text
-      x="${frameW / 2}" y="${fontSize}"
+      x="${frameW / 2}" y="${h / 2}"
       font-family="${fontFamily}" font-size="${fontSize}"
       fill="${WATCH_NOW_TEXT.color}"
-      direction="${direction}" text-anchor="${textAnchor}"
+      direction="${direction}" unicode-bidi="embed" text-anchor="${textAnchor}"
+      dominant-baseline="central"
     >${escapeXml(text)}</text>
   </svg>`
 
@@ -89,6 +91,8 @@ export async function renderCtaButton(text: string, lang: Language, frameW: numb
   const textW = text.length * fontSize * 0.55
   const btnW = Math.ceil(textW + paddingH * 2)
   const btnH = Math.ceil(fontSize + paddingV * 2)
+  // Cap rx/ry equally so corners are circular arcs, not elliptical
+  const r = Math.min(borderRadius, Math.floor(btnH / 2))
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${frameW}" height="${btnH + 20}">
     <defs>
@@ -102,14 +106,15 @@ export async function renderCtaButton(text: string, lang: Language, frameW: numb
     <rect
       x="${(frameW - btnW) / 2}" y="10"
       width="${btnW}" height="${btnH}"
-      rx="${borderRadius}" ry="${borderRadius}"
+      rx="${r}" ry="${r}"
       fill="url(#btnGrad)"
     />
     <text
-      x="${frameW / 2}" y="${10 + btnH / 2 + fontSize * 0.35}"
+      x="${frameW / 2}" y="${10 + btnH / 2}"
       font-family="${fontFamily}" font-size="${fontSize}"
       fill="${color}"
-      direction="${isAR ? 'rtl' : 'ltr'}" text-anchor="middle"
+      direction="${isAR ? 'rtl' : 'ltr'}" unicode-bidi="embed" text-anchor="middle"
+      dominant-baseline="central"
     >${escapeXml(text)}</text>
   </svg>`
 
@@ -144,9 +149,10 @@ export async function fitLogo(logoPath: string, containerW: number, containerH: 
 }
 
 // Simple text wrapper: split into lines based on estimated pixel width
-function wrapText(text: string, maxPxWidth: number, fontSize: number): string[] {
+function wrapText(text: string, maxPxWidth: number, fontSize: number, isAR = false): string[] {
   const words = text.split(/\s+/)
-  const charW = fontSize * 0.55
+  // Arabic glyphs are wider than Latin — use larger estimate to prevent overflow/cropping
+  const charW = fontSize * (isAR ? 0.65 : 0.55)
   const maxChars = Math.floor(maxPxWidth / charW)
   const lines: string[] = []
   let current = ''

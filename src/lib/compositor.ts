@@ -64,19 +64,26 @@ export async function processJob(job: ProcessingJob): Promise<string> {
     const { x: watchX, y: watchY } = layout.logoshotCta.watchNow
     const { x: ctaX, y: ctaY }    = layout.logoshotCta.button
 
-    // Build filter_complex as a string
-    let v = '[0:v]'
+    // Build filter_complex as a string.
+    // shortest=1 on the first overlay anchors total duration to [0:v] (the source video),
+    // preventing -loop 1 PNG inputs from creating an infinite output stream.
+    const frame = layout.frame
+    // FEED reuses SQ source (1080x1080) — pad to target height so overlays land correctly
+    const needsPad = videoFile.width !== frame.w || videoFile.height !== frame.h
+    let v = needsPad
+      ? `[0:v]pad=${frame.w}:${frame.h}:0:0:black[v_src];[v_src]`
+      : '[0:v]'
 
     if (hasPlate) {
-      v += `[${plateIdx}:v]overlay=0:0[vp];[vp]`
+      v += `[${plateIdx}:v]overlay=0:0:shortest=1[vp];[vp]`
     }
 
     v +=
-      `[${logoIdx}:v]overlay=${logoX}:${logoY}[vl];[vl]` +
+      `[${logoIdx}:v]overlay=${logoX}:${logoY}${hasPlate ? '' : ':shortest=1'}[vl];[vl]` +
       `[${offerIdx}:v]overlay=${offerX}:${offerY}[vo];` +
 
-      // Logoshot overlay: reset PTS to 0, show starting at t via enable
-      `[${logoshotVidIdx}:v]setpts=PTS-STARTPTS[ls];` +
+      // Shift logoshot PTS so its frame 0 aligns with output time t — animation plays from beginning
+      `[${logoshotVidIdx}:v]setpts=PTS-STARTPTS+${t}/TB[ls];` +
       `[vo][ls]overlay=0:0:enable='gte(t,${t})'[vlsbase];` +
 
       // Fade-in "Watch now on" (PNG looped via -loop 1 input option)
@@ -111,6 +118,7 @@ export async function processJob(job: ProcessingJob): Promise<string> {
         .outputOptions([
           '-map [vfinal]',
           '-map [afinal]',
+          `-t ${dur}`,
           '-c:v libx264',
           '-preset ultrafast',
           '-crf 23',

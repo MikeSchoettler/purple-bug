@@ -1,6 +1,13 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  outputFileTracingIncludes: {
+    '/api/**': [
+      './public/assets/fonts/**',
+      './public/assets/plates/**',
+      './public/assets/logoshots/**',
+    ],
+  },
   serverExternalPackages: [
     'fluent-ffmpeg',
     'ffmpeg-static',
