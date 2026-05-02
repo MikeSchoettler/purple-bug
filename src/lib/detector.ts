@@ -17,9 +17,10 @@ export async function detectVideoFiles(dir: string): Promise<VideoFile[]> {
       const format = detectFormat(filename, info.width, info.height)
       if (!format) continue
 
-      // Extract version number from filename ("Version 01", "v2", "_02", etc.)
-      const versionMatch = filename.match(/(?:version\s*|_v?|v)(\d+)/i)
-      const version = versionMatch ? parseInt(versionMatch[1], 10) : 1
+      // Extract version number from filename ("version1", "version_2", "_v3", " v3")
+      // Do NOT match bare numbers like "_6 sec" — require explicit "version" or "v" prefix
+      const versionMatch = filename.match(/version[\s_]*(\d+)|(?:^|[_\s])v(\d+)/i)
+      const version = versionMatch ? parseInt(versionMatch[1] ?? versionMatch[2], 10) : 1
 
       results.push({ path: filepath, format, version, ...info })
     } catch {
