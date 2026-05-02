@@ -112,7 +112,7 @@ export async function processJob(job: ProcessingJob): Promise<string> {
           '-map [vfinal]',
           '-map [afinal]',
           '-c:v libx264',
-          '-preset fast',
+          '-preset ultrafast',
           '-crf 23',
           '-c:a aac',
           '-b:a 192k',
