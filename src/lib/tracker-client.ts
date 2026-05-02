@@ -1,21 +1,22 @@
-const TRACKER_BASE = 'https://st-api.yandex-team.ru/v2'
-
-function robotToken(): string {
-  if (process.env.ROBOT_BOLTY_TOKEN) return process.env.ROBOT_BOLTY_TOKEN
-  throw new Error('ROBOT_BOLTY_TOKEN env var not set')
-}
-
 async function trackerFetch<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const res = await fetch(`${TRACKER_BASE}${path}`, {
+  const proxyUrl = process.env.TRACKER_PROXY_URL
+  const base = (proxyUrl ?? 'https://st-api.yandex-team.ru') + '/v2'
+
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (proxyUrl) {
+    if (process.env.PROXY_SECRET) headers['X-Proxy-Secret'] = process.env.PROXY_SECRET
+  } else {
+    const t = process.env.TRACKER_TOKEN ?? process.env.ROBOT_BOLTY_TOKEN
+    if (!t) throw new Error('No Tracker OAuth token configured (TRACKER_TOKEN or ROBOT_BOLTY_TOKEN)')
+    headers['Authorization'] = `OAuth ${t}`
+  }
+
+  const res = await fetch(`${base}${path}`, {
     ...options,
-    headers: {
-      'Authorization': `OAuth ${robotToken()}`,
-      'Content-Type': 'application/json',
-      ...(options.headers ?? {}),
-    },
+    headers: { ...headers, ...(options.headers ?? {}) },
   })
   if (!res.ok) {
     const text = await res.text()
@@ -65,9 +66,15 @@ export async function getAttachments(key: string): Promise<TrackerAttachment[]> 
 }
 
 export async function downloadAttachment(attachment: TrackerAttachment): Promise<Buffer> {
-  const res = await fetch(attachment.content, {
-    headers: { 'Authorization': `OAuth ${robotToken()}` },
-  })
+  const proxyUrl = process.env.TRACKER_PROXY_URL
+  const headers: Record<string, string> = {}
+  if (proxyUrl) {
+    if (process.env.PROXY_SECRET) headers['X-Proxy-Secret'] = process.env.PROXY_SECRET
+  } else {
+    const t = process.env.TRACKER_TOKEN ?? process.env.ROBOT_BOLTY_TOKEN
+    if (t) headers['Authorization'] = `OAuth ${t}`
+  }
+  const res = await fetch(attachment.content, { headers })
   if (!res.ok) throw new Error(`Failed to download attachment ${attachment.name}: ${res.status}`)
   return Buffer.from(await res.arrayBuffer())
 }
@@ -95,4 +102,48 @@ export async function patchIssue(key: string, fields: Record<string, unknown>): 
 
 export async function getTransitions(key: string): Promise<Array<{ id: string; display: string }>> {
   return trackerFetch<Array<{ id: string; display: string }>>(`/issues/${key}/transitions`)
+}
+
+export interface TrackerComment {
+  id: string
+  createdBy: TrackerUser
+  createdAt: string
+  text: string
+}
+
+export async function getComments(key: string): Promise<TrackerComment[]> {
+  return trackerFetch<TrackerComment[]>(`/issues/${key}/comments`)
+}
+
+export async function attachFile(
+  key: string,
+  buffer: Buffer,
+  filename: string,
+  mimeType: string,
+): Promise<void> {
+  const proxyUrl = process.env.TRACKER_PROXY_URL
+  const base = (proxyUrl ?? 'https://st-api.yandex-team.ru') + '/v2'
+
+  const headers: Record<string, string> = {}
+  if (proxyUrl) {
+    if (process.env.PROXY_SECRET) headers['X-Proxy-Secret'] = process.env.PROXY_SECRET
+  } else {
+    const t = process.env.TRACKER_TOKEN ?? process.env.ROBOT_BOLTY_TOKEN
+    if (!t) throw new Error('No Tracker OAuth token configured')
+    headers['Authorization'] = `OAuth ${t}`
+  }
+
+  const form = new FormData()
+  const ab = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer
+  form.append('file', new Blob([ab], { type: mimeType }), filename)
+
+  const res = await fetch(`${base}/issues/${key}/attachments`, {
+    method: 'POST',
+    headers,
+    body: form,
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Tracker attach ${res.status}: ${text}`)
+  }
 }

@@ -1,18 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server'
+import fs from 'fs'
+import path from 'path'
+import os from 'os'
 import {
-  getIssue, getAttachments, postComment, patchIssue, getTransitions,
+  getIssue, getAttachments, getComments, postComment, patchIssue,
+  attachFile, downloadAttachment,
   type TrackerAttachment,
 } from '@/lib/tracker-client'
 import { parseFormDescription, countTextVersions, extractTitleName } from '@/lib/issue-parser'
+import { parseTaskFile } from '@/lib/parser'
+import { runPipeline, zipOutputs } from '@/lib/processor'
+import { downloadDiskFolder } from '@/lib/disk-downloader'
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 const ROBOT_LOGIN = 'robot-bolty'
-const PRODUCER_LOGIN = 'pmerkulovext'
-const ASSESSED_TAG = 'robot-assessed'
+const GENERATION_STATUS_KEY = 'inProgressAtVendor'
 
-// Tracker sends: { "issue": { "key": "SPARKCREATIVE-123" }, "event": "..." }
-// We also accept: { "issue_key": "SPARKCREATIVE-123" } for simplicity
+// Signatures used to detect existing robot comments
+const SIG_ASSESSMENT = '🤖 **Проверка данных'
+const SIG_ALL_GOOD   = '🤖 **Все данные собраны'
+const SIG_GENERATION = '🤖 **Начинаю генерацию'
+const SIG_DONE       = '🤖 **Генерация завершена'
+
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>
   try {
@@ -21,7 +31,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  // Parse issue key from various possible webhook body formats
   const issueKey =
     (body.issue_key as string) ||
     ((body.issue as Record<string, unknown>)?.key as string)
@@ -30,25 +39,57 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'No issue_key in body' }, { status: 400 })
   }
 
-  // Prevent double-processing: if already assessed, skip Phase 1
-  const issue = await getIssue(issueKey)
-  const alreadyAssessed = issue.tags?.includes(ASSESSED_TAG)
-
-  if (alreadyAssessed) {
-    // Phase 2: confirmed by human — run generation (handled separately)
-    return NextResponse.json({ status: 'already_assessed, generation not yet implemented' })
+  let issue, comments
+  try {
+    ;[issue, comments] = await Promise.all([
+      getIssue(issueKey),
+      getComments(issueKey),
+    ])
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return NextResponse.json({ error: msg }, { status: 500 })
   }
 
-  // Phase 1: assess data completeness and post prognosis
+  const robotComments = comments.filter(c => c.createdBy.id === ROBOT_LOGIN)
+  const isPhase2 = issue.status.key === GENERATION_STATUS_KEY
+
+  if (isPhase2) {
+    // Dedup: skip if generation already started in last 15 minutes
+    const recentGen = robotComments.find(c =>
+      (c.text.startsWith(SIG_GENERATION) || c.text.startsWith(SIG_DONE)) &&
+      Date.now() - new Date(c.createdAt).getTime() < 15 * 60_000
+    )
+    if (recentGen) {
+      return NextResponse.json({ status: 'generation_already_running' })
+    }
+
+    try {
+      await runGeneration(issueKey)
+      return NextResponse.json({ status: 'generation_started' })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return NextResponse.json({ error: msg }, { status: 500 })
+    }
+  }
+
+  // Phase 1: dedup — skip if robot already posted any assessment
+  const alreadyAssessed = robotComments.some(c =>
+    c.text.startsWith(SIG_ASSESSMENT) || c.text.startsWith(SIG_ALL_GOOD)
+  )
+  if (alreadyAssessed) {
+    return NextResponse.json({ status: 'already_assessed' })
+  }
+
   try {
     await runAssessment(issueKey)
     return NextResponse.json({ status: 'assessed' })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error(`[tracker-webhook] Error assessing ${issueKey}:`, msg)
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 }
+
+// ─── Phase 1: assessment ──────────────────────────────────────────────────────
 
 async function runAssessment(issueKey: string) {
   const [issue, attachments] = await Promise.all([
@@ -56,31 +97,156 @@ async function runAssessment(issueKey: string) {
     getAttachments(issueKey),
   ])
 
-  const titleName = extractTitleName(issue.summary)
   const form = parseFormDescription(issue.description ?? '')
+  const titleName = form.titleName ?? extractTitleName(issue.summary)
   const logoAttachments = getLogoAttachments(attachments)
   const customPngAttachments = getCustomPngAttachments(attachments)
 
-  // Build assessment checklist
-  const checks = buildChecklist({
-    titleName,
-    form,
-    logoAttachments,
-    customPngAttachments,
-  })
-
+  const checks = buildChecklist({ titleName, form, logoAttachments, customPngAttachments })
   const allGood = checks.every(c => c.ok)
   const comment = buildComment(titleName, form, checks, logoAttachments, customPngAttachments)
 
   await postComment(issueKey, comment)
 
-  // Tag issue as assessed so we don't re-run Phase 1 on next trigger
+  // Tag issue as assessed to allow Phase 2 trigger to fire
   const existingTags = issue.tags ?? []
-  await patchIssue(issueKey, {
-    tags: [...existingTags, ASSESSED_TAG],
-    ...(allGood ? {} : { assignee: ROBOT_LOGIN }),
-  })
+  if (!existingTags.includes('robot-assessed')) {
+    await patchIssue(issueKey, {
+      tags: [...existingTags, 'robot-assessed'],
+    })
+  }
+
+  void allGood // Phase 2 is triggered by status change, not automatically
 }
+
+// ─── Phase 2: generation ─────────────────────────────────────────────────────
+
+async function runGeneration(issueKey: string) {
+  const [issue, attachments] = await Promise.all([
+    getIssue(issueKey),
+    getAttachments(issueKey),
+  ])
+
+  const form = parseFormDescription(issue.description ?? '')
+  const titleName = form.titleName ?? extractTitleName(issue.summary)
+  const logoAttachments = getLogoAttachments(attachments)
+  const customPngAttachments = getCustomPngAttachments(attachments)
+
+  // Re-check materials before starting
+  const checks = buildChecklist({ titleName, form, logoAttachments, customPngAttachments })
+  if (!checks.every(c => c.ok)) {
+    const missingItems = checks.filter(c => !c.ok)
+    const checkLines = checks.map(c => `${c.ok ? '✅' : '❌'} **${c.label}**: ${c.note ?? ''}`).join('\n')
+    await postComment(issueKey, [
+      `🤖 **Не могу начать генерацию по задаче "${titleName}"**`,
+      '',
+      checkLines,
+      '',
+      `⚠️ Не хватает: ${missingItems.map(c => c.label).join(', ')}`,
+    ].join('\n'))
+    return
+  }
+
+  const logoEN = logoAttachments.find(a => /\ben\b|_en\.|en_/i.test(a.name)) ?? logoAttachments[0]
+  const logoAR = logoAttachments.find(a => /\bar\b|_ar\.|ar_/i.test(a.name)) ?? logoAttachments[1]
+
+  await postComment(issueKey, [
+    `🤖 **Начинаю генерацию по задаче "${titleName}"**`,
+    `- Логотип EN: \`${logoEN?.name ?? '?'}\``,
+    `- Логотип AR: \`${logoAR?.name ?? '?'}\``,
+    `- Видео: ${form.diskUrl}`,
+    '',
+    '_Это займёт до 5 минут. Архив будет прикреплён к задаче._',
+  ].join('\n'))
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pb-'))
+  const videosDir = path.join(tmpDir, 'videos')
+  fs.mkdirSync(videosDir)
+
+  try {
+    const [logoENBuf, logoARBuf] = await Promise.all([
+      downloadAttachment(logoEN!),
+      downloadAttachment(logoAR!),
+    ])
+
+    const logoENPath = path.join(tmpDir, 'logo_en.png')
+    const logoARPath = path.join(tmpDir, 'logo_ar.png')
+    fs.writeFileSync(logoENPath, logoENBuf)
+    fs.writeFileSync(logoARPath, logoARBuf)
+
+    // Download custom overlay PNGs if present
+    const customOverlays: Record<string, string> = {}
+    for (const a of customPngAttachments) {
+      const fmt = detectOverlayFormat(a.name)
+      if (fmt) {
+        const buf = await downloadAttachment(a)
+        const p = path.join(tmpDir, `overlay_${fmt}.png`)
+        fs.writeFileSync(p, buf)
+        customOverlays[fmt] = p
+      }
+    }
+
+    if (form.diskUrl) {
+      await downloadDiskFolder(form.diskUrl, videosDir, () => {})
+    }
+
+    const taskContent = buildTaskFileContent(form, titleName)
+    const taskConfig = parseTaskFile(taskContent, {
+      titleLogoEN: logoENPath,
+      titleLogoAR: logoARPath,
+      titleName,
+      campaign: form.campaign,
+      videosLocalDir: videosDir,
+      videosDiskUrl: form.diskUrl,
+      customOverlays: Object.keys(customOverlays).length > 0 ? customOverlays : undefined,
+    })
+
+    const outputDir = path.join(tmpDir, 'output')
+    const result = await runPipeline(taskConfig, videosDir, outputDir, () => {})
+
+    fs.rmSync(videosDir, { recursive: true, force: true })
+
+    if (result.outputs.length === 0) {
+      throw new Error(`No outputs generated. Errors: ${result.errors.join('; ')}`)
+    }
+
+    const zipPath = path.join(tmpDir, `${titleName}_creatives.zip`)
+    await zipOutputs(result.outputs, zipPath)
+
+    const zipBuffer = fs.readFileSync(zipPath)
+    const safeFilename = titleName.replace(/[^\x20-\x7E]/g, '_') + '_creatives.zip'
+    await attachFile(issueKey, zipBuffer, safeFilename, 'application/zip')
+
+    await postComment(issueKey, `🤖 **Генерация завершена!**\nАрхив **${safeFilename}** прикреплён к задаче.`)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    await postComment(issueKey, `🤖 ❌ Генерация не удалась: \`${msg}\`\nОбратитесь к @schettler.`)
+    throw err
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {}
+  }
+}
+
+// Build a task file string from form answers for parseTaskFile
+function buildTaskFileContent(form: ReturnType<typeof parseFormDescription>, titleName: string): string {
+  const raw = form.rawTexts ?? ''
+  const lines: string[] = []
+
+  // If rawTexts already contains version headers, pass through as-is
+  if (/version\s*\d+/i.test(raw)) {
+    return raw
+  }
+
+  // Single version block
+  lines.push('# Version 1')
+  lines.push('Main Text')
+  for (const line of raw.split('\n').filter(Boolean)) {
+    lines.push(line)
+  }
+  return lines.join('\n')
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 interface CheckItem {
   label: string
@@ -115,8 +281,8 @@ function buildChecklist(ctx: {
         : logoAttachments.length >= 2
         ? `найдено: ${logoAttachments.map(a => a.name).join(', ')}`
         : logoAttachments.length === 1
-        ? `найден только 1 файл (нужен EN + AR) — нужно @${PRODUCER_LOGIN}`
-        : `не прикреплены — нужно @${PRODUCER_LOGIN}`,
+        ? `найден только 1 файл (нужен EN + AR)`
+        : 'не прикреплены',
     },
     {
       label: 'Тексты',
@@ -139,22 +305,15 @@ function buildComment(
   titleName: string,
   form: ReturnType<typeof parseFormDescription>,
   checks: CheckItem[],
-  logos: TrackerAttachment[],
-  customPngs: TrackerAttachment[],
+  _logos: TrackerAttachment[],
+  _customPngs: TrackerAttachment[],
 ): string {
   const allGood = checks.every(c => c.ok)
   const textVersions = form.rawTexts ? countTextVersions(form.rawTexts) : 0
-
-  const checkLines = checks
-    .map(c => `${c.ok ? '✅' : '❌'} **${c.label}**: ${c.note ?? ''}`)
-    .join('\n')
-
-  const missingItems = checks.filter(c => !c.ok)
+  const checkLines = checks.map(c => `${c.ok ? '✅' : '❌'} **${c.label}**: ${c.note ?? ''}`).join('\n')
 
   if (!allGood) {
-    const needsProducer = !logos.length && !form.isCustom
-    const producerMention = needsProducer ? `\n@${PRODUCER_LOGIN}, нужны логотипы для **${titleName}** (EN + AR PNG)` : ''
-
+    const missingItems = checks.filter(c => !c.ok)
     return [
       `🤖 **Проверка данных по задаче "${titleName}"**`,
       '',
@@ -162,15 +321,13 @@ function buildComment(
       '',
       `⚠️ Не хватает ${missingItems.length} позиции(й). Пожалуйста, дополните задачу:`,
       ...missingItems.map(c => `- ${c.label}`),
-      producerMention,
     ].join('\n')
   }
 
-  // All good — build prognosis
   const hasLogoshot = form.hasLogoshot !== false
-  const usingCustomPngs = form.isCustom && customPngs.length > 0
+  const usingCustomPngs = form.isCustom && _customPngs.length > 0
 
-  const note = [
+  return [
     `🤖 **Все данные собраны. Прогноз по задаче "${titleName}"**`,
     '',
     checkLines,
@@ -182,19 +339,15 @@ function buildComment(
     `- Языков: 2 (EN + AR)`,
     `- Форматы: SQ, WIDE, V, FEED (авто по видеофайлам)`,
     `- Логошот: ${hasLogoshot ? 'да' : 'нет'}`,
-    usingCustomPngs ? `- Оверлеи: готовые Purple Bug PNG (${customPngs.length} файл(ов))` : '',
+    usingCustomPngs ? `- Оверлеи: готовые Purple Bug PNG (${_customPngs.length} файл(ов))` : '',
     '',
     `📦 Итог: **~ ${textVersions * 2} × N_видео × форматы** MP4 + JPG`,
     '',
     '---',
-    '**Если объём верный — подтвердите, и я начну генерацию.**',
-    '*(Смените статус на «В работе» или используйте кнопку подтверждения)*',
+    '**Если объём верный — смените статус на «В работе у подрядчика», и я начну генерацию.**',
   ].filter(Boolean).join('\n')
-
-  return note
 }
 
-// Title logo files: expect 2 PNGs (EN + AR)
 function getLogoAttachments(attachments: TrackerAttachment[]): TrackerAttachment[] {
   return attachments.filter(a =>
     /\.(png|jpg|jpeg)$/i.test(a.name) &&
@@ -202,12 +355,19 @@ function getLogoAttachments(attachments: TrackerAttachment[]): TrackerAttachment
   )
 }
 
-// Custom Purple Bug overlays: PNGs uploaded when Campaign type = Custom
 function getCustomPngAttachments(attachments: TrackerAttachment[]): TrackerAttachment[] {
   return attachments.filter(a =>
     /\.(png)$/i.test(a.name) &&
     !/logo|лого|title/i.test(a.name)
   )
+}
+
+function detectOverlayFormat(filename: string): string | null {
+  if (/\bSQ\b/i.test(filename)) return 'SQ'
+  if (/\bWIDE\b/i.test(filename)) return 'WIDE'
+  if (/\bV\b/i.test(filename)) return 'V'
+  if (/\bFEED\b/i.test(filename)) return 'FEED'
+  return null
 }
 
 function campaignLabel(campaign: string): string {

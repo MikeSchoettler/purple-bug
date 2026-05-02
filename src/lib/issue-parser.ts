@@ -20,15 +20,17 @@ const CAMPAIGN_LABEL_MAP: Record<string, CampaignType> = {
 
 // Exact form question labels as they appear in the Tracker description
 const FIELD_LABELS = {
+  titleName:  'Title Name',
   campaign:   'Campaign type',
   link:       'Link',
   logoshot:   'Logoshot needed?',
   hasLogos:   "Do you have a Title's logos?",
   hasCopy:    'Do you have a Copy?',
-  copy:       'Copyright',  // ad copy / texts field
+  copy:       'Copy',  // renamed from Copyright in the form
 } as const
 
 export interface FormAnswers {
+  titleName?: string       // from "Title Name" form field
   campaign?: CampaignType
   isCustom?: boolean       // Campaign type = Custom (has own PNGs)
   diskUrl?: string
@@ -44,19 +46,30 @@ export function parseFormDescription(description: string): FormAnswers {
 
   const result: FormAnswers = {}
 
-  // Extract answer text after an exact label
+  // Extract answer text after an exact label.
+  // Handles both Yandex Forms markdown format: **Label**\n```\nValue\n```
+  // and plain format: Label:\nValue
   function extract(label: string): string | undefined {
-    // Escape special regex chars in label
     const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const m = description.match(
+    // Markdown code block format (Yandex Forms → Tracker integration)
+    const mdMatch = description.match(
+      new RegExp(`\\*\\*${escaped}[^*]*\\*\\*[^\\n]*\\n\`\`\`\\n([\\s\\S]*?)\\n\`\`\``, 'i')
+    )
+    if (mdMatch) return mdMatch[1].trim() || undefined
+    // Plain format fallback
+    const plainMatch = description.match(
       new RegExp(`${escaped}[:\\s]*\\n([\\s\\S]*?)(?=\\n\\S[^\\n]{2,}[:\\n?]|$)`, 'i')
     )
-    return m?.[1]?.trim() || undefined
+    return plainMatch?.[1]?.trim() || undefined
   }
 
   function parseBool(s: string): boolean {
     return /^(да|yes|true|1)$/i.test(s.trim())
   }
+
+  // Title name from dedicated form field
+  const titleNameRaw = extract(FIELD_LABELS.titleName)
+  if (titleNameRaw) result.titleName = titleNameRaw
 
   // Campaign type: try to match by choice ID first, then by label text
   const campaignRaw = extract(FIELD_LABELS.campaign)
@@ -93,12 +106,9 @@ export function parseFormDescription(description: string): FormAnswers {
   const hasLogosRaw = extract(FIELD_LABELS.hasLogos)
   if (hasLogosRaw) result.hasLogos = parseBool(hasLogosRaw)
 
-  // Copy / texts — "Copyright" field in form
-  const hasCopyRaw = extract(FIELD_LABELS.hasCopy)
+  // Copy / texts — use if present regardless of hasCopy toggle
   const copyRaw = extract(FIELD_LABELS.copy)
-  if (copyRaw && (!hasCopyRaw || parseBool(hasCopyRaw))) {
-    result.rawTexts = copyRaw
-  }
+  if (copyRaw) result.rawTexts = copyRaw
 
   return result
 }
