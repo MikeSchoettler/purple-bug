@@ -6,9 +6,9 @@ import {
   FONT_HEADLINE_AR, FONT_TEXT,
 } from './constants'
 
-// Load font as base64 for SVG embedding
-function fontBase64(filepath: string): string {
-  return fs.readFileSync(filepath).toString('base64')
+// Return a file:// URI for font loading — more reliable than base64 with librsvg on Linux
+function fontUri(filepath: string): string {
+  return `file://${filepath}`
 }
 
 // Generate offer text as PNG (gradient: white top → gold bottom)
@@ -16,8 +16,7 @@ export async function renderOfferText(text: string, lang: Language, maxW: number
   const isAR = lang === 'AR'
   const fontFamily = 'YangoHeadline'
   const fontFile = isAR ? FONT_HEADLINE_AR : FONT_HEADLINE
-  const fontBase = fontBase64(fontFile)
-  const fontFormat = fontFile.endsWith('.otf') ? 'opentype' : 'truetype'
+  const fUri = fontUri(fontFile)
   const fontSize = 64
   const lineHeight = 1.15
   const direction = isAR ? 'rtl' : 'ltr'
@@ -40,7 +39,7 @@ export async function renderOfferText(text: string, lang: Language, maxW: number
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${maxW}" height="${totalH}">
     <defs>
-      <style>@font-face { font-family: '${fontFamily}'; src: url('data:font/${fontFormat};base64,${fontBase}'); }</style>
+      <style>@font-face { font-family: '${fontFamily}'; src: url('${fUri}'); }</style>
       <linearGradient id="offerGrad" x1="0" y1="0" x2="0" y2="1">
         <stop offset="${g0.offset * 100}%" stop-color="${g0.color}"/>
         <stop offset="${g1.offset * 100}%" stop-color="${g1.color}"/>
@@ -57,8 +56,7 @@ export async function renderWatchNowText(lang: Language, frameW: number): Promis
   const text = WATCH_NOW_TEXT[lang]
   const isAR = lang === 'AR'
   const fontFamily = 'YangoText'
-  const fontFile = FONT_TEXT
-  const fontBase = fontBase64(fontFile)
+  const fUri = fontUri(FONT_TEXT)
   const fontSize = WATCH_NOW_TEXT.fontSize
   const direction = isAR ? 'rtl' : 'ltr'
   const textAnchor = 'middle'
@@ -66,7 +64,7 @@ export async function renderWatchNowText(lang: Language, frameW: number): Promis
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${frameW}" height="${h}">
     <defs>
-      <style>@font-face { font-family: '${fontFamily}'; src: url('data:font/truetype;base64,${fontBase}'); }</style>
+      <style>@font-face { font-family: '${fontFamily}'; src: url('${fUri}'); }</style>
     </defs>
     <text
       x="${frameW / 2}" y="${fontSize}"
@@ -83,7 +81,7 @@ export async function renderWatchNowText(lang: Language, frameW: number): Promis
 export async function renderCtaButton(text: string, lang: Language, frameW: number): Promise<Buffer> {
   const isAR = lang === 'AR'
   const fontFamily = 'YangoText'
-  const fontBase = fontBase64(FONT_TEXT)
+  const fUri = fontUri(FONT_TEXT)
   const { fontSize, paddingV, paddingH, borderRadius, color } = CTA_BUTTON
   const [g0, g1, g2] = CTA_BUTTON_GRADIENT.stops
 
@@ -94,7 +92,7 @@ export async function renderCtaButton(text: string, lang: Language, frameW: numb
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${frameW}" height="${btnH + 20}">
     <defs>
-      <style>@font-face { font-family: '${fontFamily}'; src: url('data:font/truetype;base64,${fontBase}'); }</style>
+      <style>@font-face { font-family: '${fontFamily}'; src: url('${fUri}'); }</style>
       <linearGradient id="btnGrad" x1="0" y1="0" x2="1" y2="0">
         <stop offset="${g0.offset * 100}%" stop-color="${g0.color}"/>
         <stop offset="${g1.offset * 100}%" stop-color="${g1.color}"/>

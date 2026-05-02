@@ -75,17 +75,17 @@ export async function processJob(job: ProcessingJob): Promise<string> {
       `[${logoIdx}:v]overlay=${logoX}:${logoY}[vl];[vl]` +
       `[${offerIdx}:v]overlay=${offerX}:${offerY}[vo];` +
 
-      // Logoshot overlay: starts at t, positioned over full frame
-      `[${logoshotVidIdx}:v]setpts=PTS-STARTPTS+${t}/TB[ls];` +
-      `[vo][ls]overlay=0:0:shortest=1[vlsbase];` +
+      // Logoshot overlay: reset PTS to 0, show starting at t via enable
+      `[${logoshotVidIdx}:v]setpts=PTS-STARTPTS[ls];` +
+      `[vo][ls]overlay=0:0:enable='gte(t,${t})'[vlsbase];` +
 
-      // Fade-in "Watch now on"
+      // Fade-in "Watch now on" (PNG looped via -loop 1 input option)
       `[${watchIdx}:v]fade=t=in:st=${t}:d=${fadeD}:alpha=1[fw];` +
-      `[vlsbase][fw]overlay=${watchX}:${watchY}:shortest=1[vw];` +
+      `[vlsbase][fw]overlay=${watchX}:${watchY}[vw];` +
 
-      // Fade-in CTA button
+      // Fade-in CTA button (PNG looped via -loop 1 input option)
       `[${ctaIdx}:v]fade=t=in:st=${t}:d=${fadeD}:alpha=1[fc];` +
-      `[vw][fc]overlay=${ctaX}:${ctaY}:shortest=1[vfinal]`
+      `[vw][fc]overlay=${ctaX}:${ctaY}[vfinal]`
 
     const audioFilter =
       `[0:a]atrim=0:${t},asetpts=PTS-STARTPTS[atrl];` +
@@ -97,14 +97,14 @@ export async function processJob(job: ProcessingJob): Promise<string> {
     await new Promise<void>((resolve, reject) => {
       const cmd = ffmpeg().input(videoFile.path)
 
-      if (hasPlate) cmd.input(plateFile)
+      if (hasPlate) cmd.input(plateFile).inputOptions('-loop 1')
       cmd
-        .input(titleLogoPng)
-        .input(offerPng)
+        .input(titleLogoPng).inputOptions('-loop 1')
+        .input(offerPng).inputOptions('-loop 1')
         .input(logoshotVideo)
         .input(logoshotAudio)
-        .input(watchNowPng)
-        .input(ctaPng)
+        .input(watchNowPng).inputOptions('-loop 1')
+        .input(ctaPng).inputOptions('-loop 1')
 
       cmd
         .complexFilter(`${v};${audioFilter}`)
