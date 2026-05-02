@@ -232,19 +232,16 @@ async function runGeneration(issueKey: string) {
 // Build a task file string from form answers for parseTaskFile
 function buildTaskFileContent(form: ReturnType<typeof parseFormDescription>, titleName: string): string {
   const raw = form.rawTexts ?? ''
-  const lines: string[] = []
 
-  // If rawTexts already contains version headers, pass through as-is
   if (/version\s*\d+/i.test(raw)) {
-    return raw
+    // Normalize Yandex Forms markdown-bold headers (**Version N**, *Version N*, or plain "Version N")
+    // to the # Version N format that parseTaskFile expects. Already-correct # Version N lines
+    // won't match \*{0,2} so they pass through unchanged.
+    return raw.replace(/^\*{0,2}(version\s*\d+)\*{0,2}\s*$/gim, '# $1')
   }
 
   // Single version block
-  lines.push('# Version 1')
-  lines.push('Main Text')
-  for (const line of raw.split('\n').filter(Boolean)) {
-    lines.push(line)
-  }
+  const lines = ['# Version 1', 'Main Text', ...raw.split('\n').filter(Boolean)]
   return lines.join('\n')
 }
 

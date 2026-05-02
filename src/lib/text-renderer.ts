@@ -6,9 +6,17 @@ import {
   FONT_HEADLINE_AR, FONT_TEXT,
 } from './constants'
 
-// Return a file:// URI for font loading — more reliable than base64 with librsvg on Linux
+// Cache base64-encoded fonts to avoid re-reading from disk on each render.
+// data URI embedding is required because Vercel Lambda's librsvg cannot resolve
+// file:// paths (environment no longer ships system fonts as fallback either).
+const _fontCache = new Map<string, string>()
+
 function fontUri(filepath: string): string {
-  return `file://${filepath}`
+  if (!_fontCache.has(filepath)) {
+    const b64 = fs.readFileSync(filepath).toString('base64')
+    _fontCache.set(filepath, `data:font/truetype;base64,${b64}`)
+  }
+  return _fontCache.get(filepath)!
 }
 
 // Generate offer text as PNG (gradient: white top → gold bottom)
